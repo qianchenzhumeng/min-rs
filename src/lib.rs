@@ -124,6 +124,9 @@
 //! }
 //! ```
 
+pub mod crc32;
+use crc32::*;
+
 /// Error
 pub enum Error {
     /// There is no enough space in tx buffer. The value is the size of bytes overflowed.
@@ -150,78 +153,6 @@ const STUFF_BYTE: u8 = 0x55;
 const EOF_BYTE: u8 = 0x55;
 
 const MAX_PAYLOAD: u8 = u8::MAX;
-
-const CRC_REVERSED: bool = true;
-const CRC_REFIN: bool = false;
-const CRC_REFOUT: bool = false;
-const CRC_SEED: u32 = 0xffffffff;
-const CRC_POLYNOMIAL_NORMAL: u32 = 0x04c11db7;
-const CRC_POLYNOMIAL_REVERSED: u32 = 0xedb88320;
-
-struct Crc32Context {
-    crc: u32,
-    // Reversed or Normal
-    reversed: bool,
-    refin: bool,
-    refout: bool,
-}
-
-impl Crc32Context {
-    fn new(reversed: bool, refin: bool, refout: bool) -> Self {
-        Crc32Context {
-            crc: CRC_SEED,
-            reversed: reversed,
-            refin: refin,
-            refout: refout,
-        }
-    }
-
-    fn step_normal(&mut self, byte: u8) {
-        if self.refin {
-            self.crc ^= (byte.reverse_bits() as u32) << 24;
-        } else {
-            self.crc ^= (byte as u32) << 24;
-        }
-
-        for _ in 0..8 {
-            if self.crc & 0x80000000 != 0 {
-                self.crc = (self.crc << 1) ^ CRC_POLYNOMIAL_NORMAL;
-            } else {
-                self.crc <<= 1;
-            }
-        }
-    }
-
-    fn step_reversed(&mut self, byte: u8) {
-        self.crc ^= byte as u32;
-        for _ in 0..8 {
-            if self.crc & 1 == 1 {
-                self.crc = (self.crc >> 1) ^ CRC_POLYNOMIAL_REVERSED;
-            } else {
-                self.crc >>= 1;
-            }
-        }
-    }
-
-    fn step(&mut self, byte: u8) {
-        if self.reversed {
-            self.step_reversed(byte);
-        } else {
-            self.step_normal(byte);
-        }
-    }
-
-    fn finalize(&self) -> u32 {
-        let crc: u32;
-
-        if self.refout {
-            crc = self.crc.reverse_bits();
-        } else {
-            crc = self.crc;
-        }
-        !crc
-    }
-}
 
 /// context for MIN.
 pub struct Context<'a, 'b, T, U> {
@@ -298,22 +229,12 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> {
             tx_space: tx_space,
             tx_byte: tx_byte,
             tx_header_byte_countdown: 2,
-            tx_checksum: Crc32Context {
-                crc: CRC_SEED,
-                reversed: CRC_REVERSED,
-                refin: CRC_REFIN,
-                refout: CRC_REFOUT,
-            },
+            tx_checksum: Crc32Context::new(CRC_REVERSED, CRC_REFIN, CRC_REFOUT),
             rx_header_bytes_seen: 0,
             rx_frame_state: RxState::SearchingForSof,
             rx_frame_id_control: 0,
             rx_frame_payload_bytes: 0,
-            rx_checksum: Crc32Context {
-                crc: CRC_SEED,
-                reversed: CRC_REVERSED,
-                refin: CRC_REFIN,
-                refout: CRC_REFOUT,
-            },
+            rx_checksum: Crc32Context::new(CRC_REVERSED, CRC_REFIN, CRC_REFOUT),
             rx_frame_seq: 0,
             rx_frame_length: 0,
             rx_control: 0,
