@@ -4,13 +4,21 @@
 //! ## Example
 //! ```
 //! extern crate min;
-//! use std::cell::RefCell;
+//! use std::thread;
+//! use std::sync::mpsc::{Sender, Receiver, channel};
 //! 
-//! struct App {}
+//! struct App {
+//!     name: String,
+//! }
 //! 
 //! impl App {
+//!     fn new(name: String) -> Self {
+//!         App{
+//!             name: name,
+//!         }
+//!     }
 //!     fn print_msg(&self, buffer: &[u8], len: u8) {
-//!         print!("The data received: [ ");
+//!         print!("{} receive data: [ ", self.name);
 //!         for i in 0..len {
 //!             print!("0x{:02x} ", buffer[i as usize]);
 //!         }
@@ -18,20 +26,35 @@
 //!     }
 //! }
 //! 
+//! impl min::Name for App {
+//!     fn name(&self) -> String {
+//!         self.name.clone()
+//!     }
+//! }
+//! 
 //! struct Uart {
+//!     name: String,
 //!     tx_space_avaliable: u16,
-//!     rx_buf: RefCell<[u8; 255]>,
-//!     rx_buf_index: RefCell<u8>,
-//!     loopback: bool,
+//!     sender: Sender<u8>,
+//!     receiver: Receiver<u8>,
 //! }
 //! 
 //! impl Uart {
+//!     fn new(name: String, tx_space_avaliable: u16, sender: Sender<u8>, receiver: Receiver<u8>) -> Self {
+//!         Uart{
+//!             name: name,
+//!             tx_space_avaliable: tx_space_avaliable,
+//!             sender: sender,
+//!             receiver: receiver,
+//!         }
+//!     }
+//! 
 //!     fn open(&self) {
-//!         println!("Open uart.");
+//!         println!("{}: Open uart.", self.name);
 //!     }
 //! 
 //!     fn close(&self) {
-//!         println!("Close uart.");
+//!         println!("{}: Close uart.", self.name);
 //!     }
 //! 
 //!     fn available_for_write(&self) -> u16 {
@@ -40,21 +63,17 @@
 //! 
 //!     fn tx(&self, byte: u8) {
 //!         print!("0x{:02x} ", byte);
-//!         if self.loopback {
-//!             let mut rx_buf = self.rx_buf.borrow_mut();
-//!             let mut rx_buf_index = self.rx_buf_index.borrow_mut();
-//!             rx_buf[*rx_buf_index as usize] = byte;
-//!             *rx_buf_index += 1;
+//!         match self.sender.send(byte) {
+//!             Ok(_) => {},
+//!             Err(e) => {
+//!                 println!("{}: {}", self.name, e);
+//!             },
 //!         }
-//!     }
-//! 
-//!     fn get_rx_data_len(&self) -> u8 {
-//!         *self.rx_buf_index.borrow()
 //!     }
 //! }
 //! 
-//! fn tx_start(_: &Uart) {
-//!     print!("[ ");
+//! fn tx_start(uart: &Uart) {
+//!     print!("{} send frame: [ ", uart.name);
 //! }
 //! 
 //! fn tx_finished(_: &Uart) {
@@ -79,52 +98,74 @@
 //! fn main() {
 //!     let id: u8 = 0;
 //!     let tx_data: [u8; 8] = [0xaa, 0xaa, 0xaa, 0, 0, 0, 0, 1];
-//!     let rx_data: [u8; 255] = [0; 255];
-//!     let app = App{};
-//!     let uart = Uart{
-//!         tx_space_avaliable: 128,
-//!         rx_buf: RefCell::new(rx_data),
-//!         rx_buf_index: RefCell::new(0),
-//!         loopback: true,
-//!     };
-//!     let mut min = min::Context::new(
-//!         &uart,
-//!         &app,
-//!         0,
-//!         tx_start,
-//!         tx_finished,
-//!         tx_space,
-//!         tx_byte,
-//!         application_handler,
-//!     );
+//!     let app1 = App::new(String::from("app1"));
+//!     let app2 = App::new(String::from("app2"));
+//!     let (tx1, rx2) = channel();
+//!     let (tx2, rx1) = channel();
+//!     
+//!     let app1_builder = thread::Builder::new().name("app1".into());
+//!     let app1 = app1_builder.spawn(move || {
+//!         let uart1 = Uart::new(String::from("uart1"), 128, tx1, rx1);
+//!         let mut min1 = min::Context::new(
+//!             &uart1,
+//!             &app1,
+//!             0,
+//!             false,
+//!             tx_start,
+//!             tx_finished,
+//!             tx_space,
+//!             tx_byte,
+//!             application_handler,
+//!         );
+//!         min1.hw_if.open();
 //! 
-//!     uart.open();
+//!         print!("The data to be sent: [");
+//!         for item in tx_data {
+//!             print!(" 0x{:x}", item);
+//!         }
+//!         println!(" ]");
 //! 
-//!     print!("The data to be sent: [");
-//!     for item in tx_data {
-//!         print!(" 0x{:x}", item);
-//!     }
-//!     println!(" ]");
+//!         match min1.send_frame(id, &tx_data, tx_data.len() as u8) {
+//!             Ok(size) => {
+//!                 println!("{}: {} bytes sent.", min1.hw_if.name, size);
+//!             },
+//!             Err(_) => panic!("Opps!"),
+//!         };
 //! 
-//!     print!("MIN Frame: ");
-//!     let sent = match min.send_frame(id, &tx_data, tx_data.len() as u8) {
-//!         Ok(size) => size,
-//!         Err(_) => panic!("Opps!"),
-//!     };
+//!         min1.hw_if.close();
+//!     }).unwrap();
+//!     
+//!     let app2_builder = thread::Builder::new().name("app2".into());
+//!     let app2 = app2_builder.spawn(move || {
+//!         let uart2 = Uart::new(String::from("uart2"), 128, tx2, rx2);
+//!         let mut min2 = min::Context::new(
+//!             &uart2,
+//!             &app2,
+//!             0,
+//!             false,
+//!             tx_start,
+//!             tx_finished,
+//!             tx_space,
+//!             tx_byte,
+//!             application_handler,
+//!         );
+//!         min2.hw_if.open();
 //! 
-//!     assert_eq!(tx_data.len(), sent as usize);
+//!         for byte in min2.hw_if.receiver.iter() {
+//!             rx_byte(&mut min2, &[byte as u8][0..1], 1);
+//!         }
 //! 
-//!     rx_byte(&mut min, &uart.rx_buf.borrow()[0..255], uart.get_rx_data_len() as u32);
+//!         min2.hw_if.close();
+//!     }).unwrap();
 //! 
-//!     if 0 != min.get_rx_frame_len() {
-//!         println!("The checksum in frame: 0x{:x}", min.get_rx_frame_checksum());
-//!     }
-//! 
-//!     uart.close();
+//!     app1.join().unwrap();
+//!     app2.join().unwrap();
 //! }
 //! ```
 
-mod crc32;
+mod crc;
+mod transport;
+
 pub mod context;
 
 pub use context::*;

@@ -1,9 +1,17 @@
 #[cfg(test)]
 mod tests {
-    struct App {}
+    struct App {
+        name: String,
+    }
 
     impl App {
         fn print_msg(&self, _buffer: &[u8], _len: u8) {}
+    }
+
+    impl min::Name for App {
+        fn name(&self) -> String {
+            self.name.clone()
+        }
     }
 
     struct Uart {
@@ -33,7 +41,9 @@ mod tests {
 
     #[test]
     fn send() {
-        let app = App{};
+        let app = App{
+            name: String::from("app")
+        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -44,6 +54,7 @@ mod tests {
             &uart,
             &app,
             0,
+            false,
             tx_start,
             tx_finished,
             tx_space,
@@ -65,7 +76,9 @@ mod tests {
 
     #[test]
     fn send_no_enough_buffer() {
-        let app = App{};
+        let app = App{
+            name: String::from("app")
+        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -77,6 +90,7 @@ mod tests {
             &uart,
             &app,
             0,
+            false,
             tx_start,
             tx_finished,
             tx_space,
@@ -98,7 +112,9 @@ mod tests {
 
     #[test]
     fn receive() {
-        let app = App{};
+        let app = App{
+            name: String::from("app")
+        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -114,6 +130,7 @@ mod tests {
             &uart,
             &app,
             0,
+            false,
             tx_start,
             tx_finished,
             tx_space,
@@ -132,7 +149,9 @@ mod tests {
 
     #[test]
     fn restart_receiving() {
-        let app = App{};
+        let app = App{
+            name: String::from("app")
+        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -151,6 +170,7 @@ mod tests {
             &uart,
             &app,
             0,
+            false,
             tx_start,
             tx_finished,
             tx_space,
@@ -170,7 +190,9 @@ mod tests {
 
     #[test]
     fn receive_frame_error_length() {
-        let app = App{};
+        let app = App{
+            name: String::from("app")
+        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -186,6 +208,7 @@ mod tests {
             &uart,
             &app,
             0,
+            false,
             tx_start,
             tx_finished,
             tx_space,
@@ -209,7 +232,9 @@ mod tests {
 
     #[test]
     fn receive_frame_error_checksum() {
-        let app = App{};
+        let app = App{
+            name: String::from("app")
+        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -225,6 +250,7 @@ mod tests {
             &uart,
             &app,
             0,
+            false,
             tx_start,
             tx_finished,
             tx_space,

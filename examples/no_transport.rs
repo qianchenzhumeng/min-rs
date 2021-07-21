@@ -1,7 +1,9 @@
 extern crate min;
 use std::cell::RefCell;
 
-struct App {}
+struct App {
+    name: String,
+}
 
 impl App {
     fn print_msg(&self, buffer: &[u8], len: u8) {
@@ -10,6 +12,12 @@ impl App {
             print!("0x{:02x} ", buffer[i as usize]);
         }
         println!("]");
+    }
+}
+
+impl min::Name for App {
+    fn name(&self) -> String {
+        self.name.clone()
     }
 }
 
@@ -48,8 +56,10 @@ impl Uart {
     }
 }
 
-fn tx_start(_: &Uart) {
+fn tx_start(uart: &Uart) {
     print!("[ ");
+    let mut rx_buf_index = uart.rx_buf_index.borrow_mut();
+    *rx_buf_index = 0;
 }
 
 fn tx_finished(_: &Uart) {
@@ -75,7 +85,9 @@ fn main() {
     let id: u8 = 0;
     let tx_data: [u8; 8] = [0xaa, 0xaa, 0xaa, 0, 0, 0, 0, 1];
     let rx_data: [u8; 255] = [0; 255];
-    let app = App{};
+    let app = App{
+        name: String::from("app")
+    };
     let uart = Uart{
         tx_space_avaliable: 128,
         rx_buf: RefCell::new(rx_data),
@@ -86,6 +98,7 @@ fn main() {
         &uart,
         &app,
         0,
+        false,
         tx_start,
         tx_finished,
         tx_space,

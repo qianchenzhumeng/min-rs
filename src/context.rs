@@ -1,4 +1,13 @@
-use crate::crc32::{Crc32Context, CRC_REFIN, CRC_REFOUT, CRC_REVERSED};
+extern crate log;
+use crate::crc::Crc32Context;
+use crate::transport::*;
+use std::time::{SystemTime, UNIX_EPOCH};
+use log::{warn, debug, trace};
+
+const CRC_SEED: u32 = 0xffffffff;
+const CRC_REVERSED: bool = true;
+const CRC_REFIN: bool = false;
+const CRC_REFOUT: bool = false;
 
 /// Error
 pub enum Error {
@@ -27,21 +36,29 @@ const EOF_BYTE: u8 = 0x55;
 
 const MAX_PAYLOAD: u8 = u8::MAX;
 
+pub trait Name {
+    fn name(&self) -> String;
+}
+
 /// context for MIN.
-pub struct Context<'a, 'b, T, U> {
+pub struct Context<'a, 'b, T, U> where U: Name {
+    /// Use transport protocol
+    pub t_min:  bool,
     /// Hardwar interface
     pub hw_if: &'a T,
     /// Application
     pub app: &'b U,
+    /// CALLBACK. Must return current buffer space.
+    /// Used to check that a frame can be queued.
+    pub tx_space: fn(hw_if: &'a T) -> u16,
+
+    transport: Transport,
     /// Number of the port associated with the context
     port: u8,
     /// CALLBACK. Indcates when frame transmission is starting.
     tx_start: fn(hw_if: &'a T),
     /// CALLBACK. Indcates when frame transmission is finished.
     tx_finished: fn(hw_if: &'a T),
-    /// CALLBACK. Must return current buffer space.
-    /// Used to check that a frame can be queued.
-    tx_space: fn(hw_if: &'a T) -> u16,
     /// CALLBACK. Send a byte on the given line.
     tx_byte: fn(hw_if: &'a T, port: u8, byte: u8),
     /// Count out the header bytes
@@ -72,65 +89,11 @@ pub struct Context<'a, 'b, T, U> {
     application_handler: fn(app: &'b U, min_id: u8, buffer: &[u8], len: u8, port: u8),
 }
 
-impl<'a, 'b, T, U> Context<'a, 'b, T, U> {
-    /// Construct a `Context` for MIN.
-    /// # Arguments
-    /// * `hw_if` - Reference of hardware interface.
-    /// * `app` - Reference of application.
-    /// * `port` - Number of the port associated with the context.
-    /// * `tx_start` - Callback. Indcates when frame transmission is starting.
-    /// * `tx_finished` - Callback. Indcates when frame transmission is finished.
-    /// * `tx_space` - Callback. Returns current buffer space.
-    /// * `tx_byte` - Callback. Sends a byte on the given line.
-    /// * `application_handler` - Callback. Handle incoming MIN frame.
-    pub fn new(
-        hw_if: &'a T,
-        app: &'b U,
-        port: u8,
-        tx_start: fn(hw_if: &'a T),
-        tx_finished: fn(hw_if: &'a T),
-        tx_space: fn(hw_if: &'a T) -> u16,
-        tx_byte: fn(hw_if: &'a T, port: u8, byte: u8),
-        application_handler: fn(app: &'b U, min_id: u8, buffer: &[u8], len: u8, port: u8),
-    ) -> Self {
-        Context {
-            hw_if: hw_if,
-            app: app,
-            port: port,
-            tx_start: tx_start,
-            tx_finished: tx_finished,
-            tx_space: tx_space,
-            tx_byte: tx_byte,
-            tx_header_byte_countdown: 2,
-            tx_checksum: Crc32Context::new(CRC_REVERSED, CRC_REFIN, CRC_REFOUT),
-            rx_header_bytes_seen: 0,
-            rx_frame_state: RxState::SearchingForSof,
-            rx_frame_id_control: 0,
-            rx_frame_payload_bytes: 0,
-            rx_checksum: Crc32Context::new(CRC_REVERSED, CRC_REFIN, CRC_REFOUT),
-            rx_frame_seq: 0,
-            rx_frame_length: 0,
-            rx_control: 0,
-            rx_frame_payload_buf: [0; MAX_PAYLOAD as usize],
-            rx_frame_checksum: 0,
-            application_handler: application_handler,
-        }
-    }
-
-    /// Sends an application MIN frame on the wire (do not put into the transport queue),
-    /// returning the number of bytes sent or crate::Error.
-    /// # Arguments
-    /// * `id` - Identifier/Control
-    /// * `payload` - data to send
-    /// * `len` - length of payload
-    pub fn send_frame(&mut self, id: u8, payload: &[u8], len: u8) -> Result<u8, Error> {
-        let avaliable_for_send = (self.tx_space)(&self.hw_if);
-        if u16::from(len) <= avaliable_for_send {
-            self.on_wire_bytes(id & 0x3f_u8, 0, payload, 0, 0xffff, len);
-            Ok(len)
-        } else {
-            Err(Error::NoEnoughTxSpace((len as u16) - avaliable_for_send))
-        }
+impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
+    /// Number of bytes needed for a frame with a given payload length, excluding stuff bytes
+    /// 3 header bytes, ID/control byte, length byte, seq byte, 4 byte CRC, EOF byte
+    fn on_wire_size(&self, payload_len: u8) -> u16 {
+        (payload_len as u16) + 11
     }
 
     fn stuffed_tx_byte(&mut self, byte: u8) {
@@ -150,6 +113,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> {
         }
     }
 
+    // send min frame on wire.
     fn on_wire_bytes(
         &mut self,
         id_control: u8,
@@ -160,7 +124,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> {
         payload_len: u8,
     ) {
         self.tx_header_byte_countdown = 2;
-        self.tx_checksum = Crc32Context::new(CRC_REVERSED, CRC_REFIN, CRC_REFOUT);
+        self.tx_checksum = Crc32Context::new(CRC_SEED, CRC_REVERSED, CRC_REFIN, CRC_REFOUT);
 
         (self.tx_start)(&self.hw_if);
 
@@ -196,16 +160,134 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> {
         (self.tx_finished)(self.hw_if);
     }
 
+    // send transport protocol frame on wire.
+    fn on_wire_t_frame(&mut self, id: u8, seq: u8, payload: &[u8], len: u8) -> Result<u8, Error> {
+        let avaliable_for_send = (self.tx_space)(&self.hw_if);
+        if self.on_wire_size(len) <= avaliable_for_send {
+            trace!(target: format!("{}", self.app.name()).as_str(), "on_wire_t_frame: min_id={}, seq={}, payload_len={}", id, seq, len);
+            self.on_wire_bytes(id | 0x80_u8, seq, payload, 0, 0xffff, len);
+            Ok(len)
+        } else {
+            warn!(target: format!("{}", self.app.name()).as_str(), "no enough tx space: oversize={}", (len as u16) - avaliable_for_send);
+            Err(Error::NoEnoughTxSpace((len as u16) - avaliable_for_send))
+        }
+    }
+
+    fn transport_fifo_frame_send(&mut self, idx: usize, update_seq: bool) {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+        self.transport.last_received_anything_ms = now;
+        // 这个地方需要发送找到的 frame，并且修改该 frame 的最后发送时间。由于借用规则的限制，需要分两步完成。
+        if let Some(mut frame) = self.transport.frames.get_mut(idx) {
+            frame.last_sent_time_ms = now;
+            if update_seq {
+                frame.seq = self.transport.sn_max;
+            }
+        }
+        // 这个地方有点疑惑，为什么必须是 `&mut frame`，去掉 `&mut` 会因两次可变借用而编译失败，进一步改为 `get` 后，会因可变借用和不可变借用同时发生而编译失败
+        if let Some(&mut frame) = self.transport.frames.get_mut(idx) {
+            debug!(target: format!("{}", self.app.name()).as_str(), "send T-Frame: id={}, seq={}, len={}", frame.min_id, frame.seq, frame.payload_len);
+            self.on_wire_t_frame(frame.min_id, frame.seq, &frame.payload[0..frame.payload_len as usize], frame.payload_len).unwrap_or(0);
+        }
+    }
+
     /// This runs the receiving half of the transport protocol, acknowledging frames received, discarding
     /// duplicates received, and handling RESET requests.
-    fn valid_frame_received(&self) {
-        (self.application_handler)(
-            self.app,
-            self.rx_frame_id_control & 0x3f,
-            &self.rx_frame_payload_buf,
-            self.rx_control,
-            self.port,
-        );
+    fn valid_frame_received(&mut self) {
+        if self.t_min {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+            self.transport.last_received_anything_ms = now;
+            match self.rx_frame_id_control {
+                ACK => {
+                    // If we get an ACK then we remove all the acknowledged frames with seq < rn
+                    // The payload byte specifies the number of NACKed frames: how many we want retransmitted because
+                    // they have gone missing.
+                    // But we need to make sure we don't accidentally ACK too many because of a stale ACK from an old session
+                    let num_acked = self.rx_frame_seq - self.transport.sn_min;
+                    let num_nacked = self.rx_frame_payload_buf[0] - self.rx_frame_seq;  // 好像一直会是 0
+                    let num_in_window = self.transport.sn_max - self.transport.sn_min;
+                    if num_acked <= num_in_window {
+                        self.transport.sn_min = self.rx_frame_seq;
+                        // Now pop off all the frames up to (but not including) rn
+                        // The ACK contains Rn; all frames before Rn are ACKed and can be removed from the window
+                        debug!(target: format!("{}", self.app.name()).as_str(), "Received ACK seq={}, num_acked={}, num_nacked={}", self.rx_frame_seq, num_acked, num_nacked);
+                        for _ in 0..num_acked {
+                            debug!(target: format!("{}", self.app.name()).as_str(), "Pop transport fifo.");
+                            self.transport.pop();
+                        }
+                        // Now retransmit the number of frames that were requested
+                        for i in 0..num_nacked {
+                            self.transport_fifo_frame_send(i.into(), false);
+                        }
+                    } else {
+                        debug!(target: format!("{}", self.app.name()).as_str(), "Received spurious ACK seq={}", self.rx_frame_seq);
+                        self.transport.spurious_acks = self.transport.spurious_acks.wrapping_add(1);
+                    }
+                },
+                RESET => {
+                    // If we get a RESET demand then we reset the transport protocol (empty the FIFO, reset the
+                    // sequence numbers, etc.)
+                    // We don't send anything, we just do it. The other end can send frames to see if this end is
+                    // alive (pings, etc.) or just wait to get application frames.
+                    self.transport.resets_received = self.transport.resets_received.wrapping_add(1);
+                    self.transport.reset_transport_fifo();
+                },
+                _ => {
+                    if self.rx_frame_id_control & 0x80 == 0x80 {
+                        // Incoming application frames
+                        // Reset the activity time (an idle connection will be stalled)
+                        self.transport.last_received_frame_ms = now;
+                        if self.rx_frame_seq == self.transport.rn {
+                            debug!(target: format!("{}", self.app.name()).as_str(), "Incoming app frame seq={}, id={}, payload len={}",
+                                self.rx_frame_seq, self.rx_frame_id_control & 0x3f, self.rx_control);
+                            // Now looking for the next one in the sequence
+                            self.transport.rn = self.transport.rn.wrapping_add(1);
+                            // Always send an ACK back for the frame we received
+                            // ACKs are short (should be about 9 microseconds to send on the wire) and
+                            // this will cut the latency down.
+                            // We also periodically send an ACK in case the ACK was lost, and in any case
+                            // frames are re-sent.
+                            self.send_ack();
+                            // Now ready to pass this up to the application handlers
+
+                            // Pass frame up to application handler to deal with
+                            (self.application_handler)(
+                                self.app,
+                                self.rx_frame_id_control & 0x3f,
+                                &self.rx_frame_payload_buf,
+                                self.rx_control,
+                                self.port,
+                            );
+                        } else {
+                            // Discard this frame because we aren't looking for it: it's either a dupe because it was
+                            // retransmitted when our ACK didn't get through in time, or else it's further on in the
+                            // sequence and others got dropped.
+                            warn!(target: format!("{}", self.app.name()).as_str(), "sequence mismatch: seq={}, rn={}", self.rx_frame_seq, self.transport.rn);
+                            self.transport.sequence_mismatch_drop = self.transport.sequence_mismatch_drop.wrapping_add(1);
+                        }
+                    } else {
+                        debug!(target: format!("{}", self.app.name()).as_str(), "get a app frame(MIN)");
+                        // Not a transport frame
+                        (self.application_handler)(
+                            self.app,
+                            self.rx_frame_id_control & 0x3f,
+                            &self.rx_frame_payload_buf,
+                            self.rx_control,
+                            self.port,
+                        );
+                    }
+                },
+            }
+        } else {
+            debug!(target: format!("{}", self.app.name()).as_str(), "Incoming app frame id={}, payload len={}",
+                self.rx_frame_id_control & 0x3f, self.rx_control);
+            (self.application_handler)(
+                self.app,
+                self.rx_frame_id_control & 0x3f,
+                &self.rx_frame_payload_buf,
+                self.rx_control,
+                self.port,
+            );
+        }
     }
 
     fn rx_byte(&mut self, byte: u8) {
@@ -242,11 +324,16 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> {
             RxState::ReceivingIdControl => {
                 self.rx_frame_id_control = byte;
                 self.rx_frame_payload_bytes = 0;
-                self.rx_checksum = Crc32Context::new(CRC_REVERSED, CRC_REFIN, CRC_REFOUT);
+                self.rx_checksum = Crc32Context::new(CRC_SEED, CRC_REVERSED, CRC_REFIN, CRC_REFOUT);
                 self.rx_checksum.step(byte);
                 if byte & 0x80 == 0x80 {
-                    // If there is no transport support compiled in then all transport frames are ignored
-                    self.rx_frame_state = RxState::SearchingForSof;
+                    if self.t_min {
+                        self.rx_frame_state = RxState::ReceivingSeq;
+                    } else {
+                        // If there is no transport support compiled in then all transport frames are ignored
+                        warn!(target: format!("{}", self.app.name()).as_str(), "no transport support, drop this frame.");
+                        self.rx_frame_state = RxState::SearchingForSof;
+                    }
                 } else {
                     self.rx_frame_seq = 0;
                     self.rx_frame_state = RxState::ReceivingLength;
@@ -316,10 +403,183 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> {
         }
     }
 
+    fn find_retransmit_frame(&mut self) -> (usize, u128) {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+        let window_size = self.transport.sn_max - self.transport.sn_min;
+        let mut oldest_elapsed_time: u128 = 0;
+        let mut oldest_frame_index: usize = 0;
+        let mut last_sent_time_ms = 0;
+        for i in 0..window_size {
+            if let Some(frame) = self.transport.frames.get(i.into()) {
+                let elapsed = now - frame.last_sent_time_ms;
+                if elapsed > oldest_elapsed_time {
+                    oldest_elapsed_time = elapsed;
+                    oldest_frame_index = i.into();
+                    last_sent_time_ms = frame.last_sent_time_ms;
+                }
+            }
+        }
+        (oldest_frame_index, last_sent_time_ms)
+    }
+
+    fn push(&mut self, frame: TransportFrame) {
+        self.transport.frames.push_back(frame);
+        self.transport.n_frames = self.transport.n_frames.wrapping_add(1);
+        if self.transport.n_frames_max < self.transport.n_frames {
+            self.transport.n_frames_max = self.transport.n_frames;
+        }
+        debug!(target: format!("{}", self.app.name()).as_str(), "Queued ID={}, len={}", frame.min_id, frame.payload_len);
+    }
+
+    fn send_ack(&mut self) {
+        let now =SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+        debug!(target: format!("{}", self.app.name()).as_str(), "send ACK: seq={}", self.transport.rn);
+        self.on_wire_t_frame(ACK, self.transport.rn, &[self.transport.rn][0..1], 1).unwrap_or(0);
+        self.transport.last_sent_ack_time_ms = now;
+    }
+
+    fn send_reset(&mut self) {
+        self.on_wire_bytes(RESET, 0, &[0][0..0], 0, 0, 0);
+    }
+}
+
+impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
+    /// Construct a `Context` for MIN.
+    /// # Arguments
+    /// * `hw_if` - Reference of hardware interface.
+    /// * `app` - Reference of application.
+    /// * `port` - Number of the port associated with the context.
+    /// * `t_min` - Use transport protocol.
+    /// * `tx_start` - Callback. Indcates when frame transmission is starting.
+    /// * `tx_finished` - Callback. Indcates when frame transmission is finished.
+    /// * `tx_space` - Callback. Returns current buffer space.
+    /// * `tx_byte` - Callback. Sends a byte on the given line.
+    /// * `application_handler` - Callback. Handle incoming MIN frame.
+    pub fn new(
+        hw_if: &'a T,
+        app: &'b U,
+        port: u8,
+        t_min: bool,
+        tx_start: fn(hw_if: &'a T),
+        tx_finished: fn(hw_if: &'a T),
+        tx_space: fn(hw_if: &'a T) -> u16,
+        tx_byte: fn(hw_if: &'a T, port: u8, byte: u8),
+        application_handler: fn(app: &'b U, min_id: u8, buffer: &[u8], len: u8, port: u8),
+    ) -> Self {
+        Context {
+            transport: Transport::new(),
+            hw_if: hw_if,
+            app: app,
+            port: port,
+            t_min: t_min,
+            tx_start: tx_start,
+            tx_finished: tx_finished,
+            tx_space: tx_space,
+            tx_byte: tx_byte,
+            tx_header_byte_countdown: 2,
+            tx_checksum: Crc32Context::new(CRC_SEED, CRC_REVERSED, CRC_REFIN, CRC_REFOUT),
+            rx_header_bytes_seen: 0,
+            rx_frame_state: RxState::SearchingForSof,
+            rx_frame_id_control: 0,
+            rx_frame_payload_bytes: 0,
+            rx_checksum: Crc32Context::new(CRC_SEED, CRC_REVERSED, CRC_REFIN, CRC_REFOUT),
+            rx_frame_seq: 0,
+            rx_frame_length: 0,
+            rx_control: 0,
+            rx_frame_payload_buf: [0; MAX_PAYLOAD as usize],
+            rx_frame_checksum: 0,
+            application_handler: application_handler,
+        }
+    }
+
+    /// Sends an application MIN frame on the wire (do not put into the transport queue),
+    /// returning the number of bytes sent or crate::Error.
+    /// # Arguments
+    /// * `id` - Identifier/Control
+    /// * `payload` - data to send
+    /// * `len` - length of payload
+    pub fn send_frame(&mut self, id: u8, payload: &[u8], len: u8) -> Result<u8, Error> {
+        let avaliable_for_send = (self.tx_space)(&self.hw_if);
+        if self.on_wire_size(len) <= avaliable_for_send {
+            self.on_wire_bytes(id & 0x3f_u8, 0, payload, 0, 0xffff, len);
+            Ok(len)
+        } else {
+            Err(Error::NoEnoughTxSpace((len as u16) - avaliable_for_send))
+        }
+    }
+
+    pub fn reset_transport(&mut self, inform_other_side: bool) -> Result<(), String> {
+        if self.t_min {
+            if inform_other_side {
+                self.send_reset();
+            }
+            self.transport.reset_transport_fifo();
+            Ok(())
+        } else {
+            warn!(target: format!("{}", self.app.name()).as_str(), "no transport support.");
+            Err(String::from("no transport support."))
+        }
+    }
+
+    /// Queues a MIN ID / payload frame into the outgoing FIFO(T-MIN only)
+    /// Returns true if the frame was queued or false if context doesn't support transport protocol
+    pub fn queue_frame(&mut self, id: u8, payload: &[u8], len: u8) -> Result<(), String> {
+        if self.t_min {
+            let frame = TransportFrame::new(id, payload, len);
+            self.push(frame);
+            Ok(())
+        } else {
+            warn!(target: format!("{}", self.app.name()).as_str(), "no transport support.");
+            Err(String::from("no transport support."))
+        }
+    }
+
     /// sends received bytes into a MIN context and runs the transport timeouts.
     pub fn poll(&mut self, buf: &[u8], buf_len: u32) {
         for i in 0..buf_len {
             self.rx_byte(buf[i as usize]);
+        }
+
+        // for T-MIN
+        if self.t_min {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+            let mut remote_connected = false;
+            let mut remote_active = false;
+            if now - self.transport.last_received_anything_ms < TRANSPORT_IDLE_TIMEOUT_MS {
+                remote_connected = true;
+            }
+            if now - self.transport.last_received_frame_ms < TRANSPORT_IDLE_TIMEOUT_MS {
+                remote_active = true;
+            }
+            let window_size = self.transport.sn_max - self.transport.sn_min;
+            if (window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self.transport.n_frames > window_size) {
+                debug!(target: format!("{}", self.app.name()).as_str(), "Send new frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
+                    window_size, self.transport.sn_max, self.transport.sn_min, self.transport.n_frames
+                );
+                // There are new frames we can send; but don't even bother if there's no buffer space for them
+                self.transport_fifo_frame_send(window_size as usize, true);
+                self.transport.sn_max = self.transport.sn_max.wrapping_add(1);
+            } else {
+                // Sender cannot send new frames so resend old ones (if there's anyone there)
+                if (window_size > 0) && remote_connected {
+                    // There are unacknowledged frames. Can re-send an old frame. Pick the least recently sent one.
+                    let (index, last_sent_time_ms) = self.find_retransmit_frame();
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+                    if now - last_sent_time_ms >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS {
+                        debug!(target: format!("{}", self.app.name()).as_str(), "Send old frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
+                            window_size, self.transport.sn_max, self.transport.sn_min, self.transport.n_frames
+                        );
+                        self.transport_fifo_frame_send(index, false);
+                    }
+                }
+            }
+    
+            // 发送 ack
+            if now - self.transport.last_sent_ack_time_ms > TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS {
+                if remote_active {
+                    self.send_ack();
+                }
+            }
         }
     }
 
@@ -333,5 +593,17 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> {
 
     pub fn get_rx_frame_len(&self) -> u8 {
         self.rx_control
+    }
+
+    pub fn get_reset_cnt(&self) -> u32 {
+        self.transport.get_reset_cnt()
+    }
+
+    pub fn get_spurious_ack_cnt(&self) -> u32 {
+        self.transport.get_spurious_ack_cnt()
+    }
+
+    pub fn get_drop_cnt(&self) -> u32 {
+        self.transport.get_drop_cnt()
     }
 }

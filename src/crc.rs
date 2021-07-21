@@ -1,9 +1,5 @@
-pub const CRC_REVERSED: bool = true;
-pub const CRC_REFIN: bool = false;
-pub const CRC_REFOUT: bool = false;
-pub const CRC_SEED: u32 = 0xffffffff;
-pub const CRC_POLYNOMIAL_NORMAL: u32 = 0x04c11db7;
-pub const CRC_POLYNOMIAL_REVERSED: u32 = 0xedb88320;
+const CRC_POLYNOMIAL_NORMAL: u32 = 0x04c11db7;
+const CRC_POLYNOMIAL_REVERSED: u32 = 0xedb88320;
 
 pub struct Crc32Context {
     crc: u32,
@@ -14,6 +10,15 @@ pub struct Crc32Context {
 }
 
 impl Crc32Context {
+    pub fn new(crc: u32, reversed: bool, refin: bool, refout: bool) -> Self {
+        Crc32Context {
+            crc: crc,
+            reversed: reversed,
+            refin: refin,
+            refout: refout,
+        }
+    }
+
     fn step_normal(&mut self, byte: u8) {
         if self.refin {
             self.crc ^= (byte.reverse_bits() as u32) << 24;
@@ -38,17 +43,6 @@ impl Crc32Context {
             } else {
                 self.crc >>= 1;
             }
-        }
-    }
-}
-
-impl Crc32Context {
-    pub fn new(reversed: bool, refin: bool, refout: bool) -> Self {
-        Crc32Context {
-            crc: CRC_SEED,
-            reversed: reversed,
-            refin: refin,
-            refout: refout,
         }
     }
 
