@@ -237,7 +237,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                         // Reset the activity time (an idle connection will be stalled)
                         self.transport.last_received_frame_ms = now;
                         if self.rx_frame_seq == self.transport.rn {
-                            debug!(target: format!("{}", self.app.name()).as_str(), "Incoming app frame seq={}, id={}, payload len={}",
+                            debug!(target: format!("{}", self.app.name()).as_str(), "Incoming T-MIN frame seq={}, id={}, payload len={}",
                                 self.rx_frame_seq, self.rx_frame_id_control & 0x3f, self.rx_control);
                             // Now looking for the next one in the sequence
                             self.transport.rn = self.transport.rn.wrapping_add(1);
@@ -265,7 +265,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                             self.transport.sequence_mismatch_drop = self.transport.sequence_mismatch_drop.wrapping_add(1);
                         }
                     } else {
-                        debug!(target: format!("{}", self.app.name()).as_str(), "get a app frame(MIN)");
+                        debug!(target: format!("{}", self.app.name()).as_str(), "Incoming MIN frame id={}, payload len={}", self.rx_frame_id_control & 0x3f, self.rx_control);
                         // Not a transport frame
                         (self.application_handler)(
                             self.app,
@@ -385,6 +385,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                 let crc = self.rx_checksum.finalize();
                 if crc != self.rx_frame_checksum {
                     // Frame fails the checksum and so is dropped
+                    warn!(target: format!("{}", self.app.name()).as_str(), "crc error, drop this frame.");
                     self.rx_frame_state = RxState::SearchingForSof;
                 } else {
                     // Checksum passes, go on to check for the end-of-frame marker
@@ -439,6 +440,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
     }
 
     fn send_reset(&mut self) {
+        debug!(target: format!("{}", self.app.name()).as_str(), "send RESET");
         self.on_wire_bytes(RESET, 0, &[0][0..0], 0, 0, 0);
     }
 }
@@ -510,6 +512,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
 
     pub fn reset_transport(&mut self, inform_other_side: bool) -> Result<(), String> {
         if self.t_min {
+            debug!(target: format!("{}", self.app.name()).as_str(), "reset transport(clear the fifo, restart timing).");
             if inform_other_side {
                 self.send_reset();
             }
