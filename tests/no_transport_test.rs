@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod tests {
+    extern crate min_rs as min;
+
     struct App {
         name: String,
     }

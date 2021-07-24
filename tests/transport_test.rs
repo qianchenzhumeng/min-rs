@@ -1,8 +1,7 @@
 
 #[cfg(test)]
 mod tests {
-
-    extern crate min;
+    extern crate min_rs as min;
     use std::cell::RefCell;
 
     struct App {

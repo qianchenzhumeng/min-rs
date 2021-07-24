@@ -3,7 +3,7 @@
 
 //! ## Example
 //! ```
-//! extern crate min;
+//! extern crate min_rs as min;
 //! use std::thread;
 //! use std::sync::mpsc::{Sender, Receiver, channel};
 //! 
