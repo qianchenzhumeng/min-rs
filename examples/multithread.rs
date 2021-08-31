@@ -44,23 +44,21 @@ impl Uart {
     }
 }
 
-fn tx_start(uart: &Uart) {
-    print!("{} send frame: [ ", uart.name);
-}
-
-fn tx_finished(_: &Uart) {
-    println!("]");
-}
-fn tx_space(uart: &Uart) -> u16 {
-    uart.available_for_write()
-}
-
-fn tx_byte(uart: &Uart, _port: u8, byte: u8) {
-    uart.tx(byte);
-}
-
-fn rx_byte(min: &mut min::Context<Uart>, buf: &[u8], buf_len: u32) {
-    min.poll(buf, buf_len);
+impl min::Interface for Uart {
+    fn tx_start(&self) {
+        print!("{} send frame: [ ", self.name);
+    }
+    
+    fn tx_finished(&self) {
+        println!("]");
+    }
+    fn tx_space(&self) -> u16 {
+        self.available_for_write()
+    }
+    
+    fn tx_byte(&self, _port: u8, byte: u8) {
+        self.tx(byte);
+    }
 }
 
 fn main() {
@@ -80,10 +78,6 @@ fn main() {
             &uart1,
             0,
             false,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
         min1.hw_if.open();
 
@@ -111,15 +105,11 @@ fn main() {
             &uart2,
             0,
             false,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
         min2.hw_if.open();
 
         for byte in min2.hw_if.receiver.iter() {
-            rx_byte(&mut min2, &[byte as u8][0..1], 1);
+            min2.poll(&[byte as u8][0..1], 1);
         }
 
         match min2.get_msg() {

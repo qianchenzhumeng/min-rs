@@ -49,27 +49,25 @@ impl Uart {
     }
 }
 
-fn tx_start(uart: &Uart) {
-    let mut output = uart.output.lock().unwrap();
-    output.clear();
-    output.push_str(format!("send frame: [ ").as_str());
-}
-
-fn tx_finished(uart: &Uart) {
-    let mut output = uart.output.lock().unwrap();
-    output.push_str(format!("]").as_str());
-    trace!(target: uart.name.as_str(), "{}", output);
-}
-fn tx_space(uart: &Uart) -> u16 {
-    uart.available_for_write()
-}
-
-fn tx_byte(uart: &Uart, _port: u8, byte: u8) {
-    uart.tx(byte);
-}
-
-fn rx_byte(min: &mut min::Context<Uart>, buf: &[u8], buf_len: u32) {
-    min.poll(buf, buf_len);
+impl min::Interface for Uart {
+    fn tx_start(&self) {
+        let mut output = self.output.lock().unwrap();
+        output.clear();
+        output.push_str(format!("send frame: [ ").as_str());
+    }
+    
+    fn tx_finished(&self) {
+        let mut output = self.output.lock().unwrap();
+        output.push_str(format!("]").as_str());
+        trace!(target: self.name.as_str(), "{}", output);
+    }
+    fn tx_space(&self) -> u16 {
+        self.available_for_write()
+    }
+    
+    fn tx_byte(&self, _port: u8, byte: u8) {
+        self.tx(byte);
+    }
 }
 
 fn main() {
@@ -92,10 +90,6 @@ fn main() {
             &uart1,
             0,
             true,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte
         );
         min1.hw_if.open();
 
@@ -104,7 +98,7 @@ fn main() {
         min1.queue_frame(id, &tx_data1, tx_data1.len() as u8).unwrap();
         loop {
             for byte in min1.hw_if.receiver.try_iter() {
-                rx_byte(&mut min1, &[byte as u8][0..1], 1);
+                min1.poll(&[byte as u8][0..1], 1);
             }
             min1.poll(&[0][0..0], 0);
             if let Ok(msg) = min1.get_msg() {
@@ -128,10 +122,6 @@ fn main() {
             &uart2,
             0,
             true,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
         min2.hw_if.open();
 
@@ -139,7 +129,7 @@ fn main() {
         min2.queue_frame(id, &tx_data2, tx_data2.len() as u8).unwrap();
         loop {
             for byte in min2.hw_if.receiver.try_iter() {
-                rx_byte(&mut min2, &[byte as u8][0..1], 1);
+                min2.poll(&[byte as u8][0..1], 1);
             }
             min2.poll(&[0][0..0], 0);
             if let Ok(msg) = min2.get_msg() {

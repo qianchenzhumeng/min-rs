@@ -60,25 +60,15 @@ impl Msg {
     }
 }
 /// context for MIN.
-pub struct Context<'a, T> {
+pub struct Context<'a, T> where T: crate::Interface {
     pub name: String,
     /// Use transport protocol
     pub t_min:  bool,
     /// Hardwar interface
     pub hw_if: &'a T,
-    /// CALLBACK. Must return current buffer space.
-    /// Used to check that a frame can be queued.
-    pub tx_space: fn(hw_if: &'a T) -> u16,
-
     transport: Transport,
     /// Number of the port associated with the context
     port: u8,
-    /// CALLBACK. Indcates when frame transmission is starting.
-    tx_start: fn(hw_if: &'a T),
-    /// CALLBACK. Indcates when frame transmission is finished.
-    tx_finished: fn(hw_if: &'a T),
-    /// CALLBACK. Send a byte on the given line.
-    tx_byte: fn(hw_if: &'a T, port: u8, byte: u8),
     /// Count out the header bytes
     tx_header_byte_countdown: u8,
     /// Calculated checksum for sending frame
@@ -106,7 +96,7 @@ pub struct Context<'a, T> {
     msg_queue: Vec<Msg>,
 }
 
-impl<'a, T> Context<'a, T> {
+impl<'a, T> Context<'a, T> where T: crate::Interface {
     
     fn msg_enqueue(&mut self) {
         let msg = Msg::new(self.rx_frame_id_control & 0x3f, &self.rx_frame_payload_buf, self.rx_control, self.port);
@@ -121,14 +111,14 @@ impl<'a, T> Context<'a, T> {
 
     fn stuffed_tx_byte(&mut self, byte: u8) {
         // Transmit the byte
-        (self.tx_byte)(self.hw_if, self.port, byte);
+        self.hw_if.tx_byte(self.port, byte);
 
         self.tx_checksum.step(byte);
 
         if byte == HEADER_BYTE {
             self.tx_header_byte_countdown -= 1;
             if self.tx_header_byte_countdown == 0 {
-                (self.tx_byte)(self.hw_if, self.port, STUFF_BYTE);
+                self.hw_if.tx_byte(self.port, STUFF_BYTE);
                 self.tx_header_byte_countdown = 2;
             }
         } else {
@@ -149,12 +139,12 @@ impl<'a, T> Context<'a, T> {
         self.tx_header_byte_countdown = 2;
         self.tx_checksum = Crc32Context::new(CRC_SEED, CRC_REVERSED, CRC_REFIN, CRC_REFOUT);
 
-        (self.tx_start)(&self.hw_if);
+        self.hw_if.tx_start();
 
         // Header is 3 bytes; because unstuffed will reset receiver immediately
-        (self.tx_byte)(self.hw_if, self.port, HEADER_BYTE);
-        (self.tx_byte)(self.hw_if, self.port, HEADER_BYTE);
-        (self.tx_byte)(self.hw_if, self.port, HEADER_BYTE);
+        self.hw_if.tx_byte(self.port, HEADER_BYTE);
+        self.hw_if.tx_byte(self.port, HEADER_BYTE);
+        self.hw_if.tx_byte(self.port, HEADER_BYTE);
 
         self.stuffed_tx_byte(id_control);
         if id_control & 0x80 == 0x80 {
@@ -178,14 +168,14 @@ impl<'a, T> Context<'a, T> {
         self.stuffed_tx_byte(checksum as u8 & 0xff);
 
         // Ensure end-of-frame doesn't contain 0xaa and confuse search for start-of-frame
-        (self.tx_byte)(self.hw_if, self.port, EOF_BYTE);
+        self.hw_if.tx_byte(self.port, EOF_BYTE);
 
-        (self.tx_finished)(self.hw_if);
+        self.hw_if.tx_finished();
     }
 
     // send transport protocol frame on wire.
     fn on_wire_t_frame(&mut self, id: u8, seq: u8, payload: &[u8], len: u8) -> Result<u8, Error> {
-        let avaliable_for_send = (self.tx_space)(&self.hw_if);
+        let avaliable_for_send = self.hw_if.tx_space();
         if self.on_wire_size(len) <= avaliable_for_send {
             trace!(target: format!("{}", self.name).as_str(), "on_wire_t_frame: min_id={}, seq={}, payload_len={}", id, seq, len);
             self.on_wire_bytes(id | 0x80_u8, seq, payload, 0, 0xffff, len);
@@ -449,7 +439,7 @@ impl<'a, T> Context<'a, T> {
     }
 }
 
-impl<'a, T> Context<'a, T> {
+impl<'a, T> Context<'a, T> where T: crate::Interface{
     /// Construct a `Context` for MIN.
     /// # Arguments
     /// * `name` - identifier string for debug.
@@ -465,10 +455,6 @@ impl<'a, T> Context<'a, T> {
         hw_if: &'a T,
         port: u8,
         t_min: bool,
-        tx_start: fn(hw_if: &'a T),
-        tx_finished: fn(hw_if: &'a T),
-        tx_space: fn(hw_if: &'a T) -> u16,
-        tx_byte: fn(hw_if: &'a T, port: u8, byte: u8),
     ) -> Self {
         Context {
             transport: Transport::new(),
@@ -476,10 +462,6 @@ impl<'a, T> Context<'a, T> {
             name: name,
             port: port,
             t_min: t_min,
-            tx_start: tx_start,
-            tx_finished: tx_finished,
-            tx_space: tx_space,
-            tx_byte: tx_byte,
             tx_header_byte_countdown: 2,
             tx_checksum: Crc32Context::new(CRC_SEED, CRC_REVERSED, CRC_REFIN, CRC_REFOUT),
             rx_header_bytes_seen: 0,
@@ -503,7 +485,7 @@ impl<'a, T> Context<'a, T> {
     /// * `payload` - data to send
     /// * `len` - length of payload
     pub fn send_frame(&mut self, id: u8, payload: &[u8], len: u8) -> Result<u8, Error> {
-        let avaliable_for_send = (self.tx_space)(&self.hw_if);
+        let avaliable_for_send = self.hw_if.tx_space();
         if self.on_wire_size(len) <= avaliable_for_send {
             self.on_wire_bytes(id & 0x3f_u8, 0, payload, 0, 0xffff, len);
             Ok(len)

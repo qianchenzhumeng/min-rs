@@ -15,13 +15,15 @@ mod tests {
         }
     }
 
-    fn tx_start(_: &Uart) {}
-    fn tx_finished(_: &Uart) {}
-    fn tx_space(uart: &Uart) -> u16 {
-        uart.available_for_write()
-    }
-    fn tx_byte(uart: &Uart, _port: u8, byte: u8) {
-        uart.tx(byte);
+    impl min::Interface for Uart {
+        fn tx_start(&self) {}
+        fn tx_finished(&self) {}
+        fn tx_space(&self) -> u16 {
+            self.available_for_write()
+        }
+        fn tx_byte(&self, _port: u8, byte: u8) {
+            self.tx(byte);
+        }
     }
 
     #[test]
@@ -37,10 +39,6 @@ mod tests {
             &uart,
             0,
             false,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();
@@ -69,10 +67,6 @@ mod tests {
             &uart,
             0,
             false,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();
@@ -106,10 +100,6 @@ mod tests {
             &uart,
             0,
             false,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();
@@ -142,10 +132,6 @@ mod tests {
             &uart,
             0,
             false,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();
@@ -176,10 +162,6 @@ mod tests {
             &uart,
             0,
             false,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();
@@ -214,10 +196,6 @@ mod tests {
             &uart,
             0,
             false,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();

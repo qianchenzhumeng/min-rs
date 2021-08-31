@@ -39,25 +39,24 @@ mod tests {
         }
     }
 
-    fn tx_start(uart: &Uart) {
-        print!("[ ");
-        let mut rx_buf_index = uart.rx_buf_index.borrow_mut();
-        *rx_buf_index = 0;
-    }
+    impl min::Interface for Uart {
+        fn tx_finished(&self) {
+            println!("]");
+        }
 
-    fn tx_finished(_: &Uart) {
-        println!("]");
-    }
-    fn tx_space(uart: &Uart) -> u16 {
-        uart.available_for_write()
-    }
+        fn tx_space(&self) -> u16 {
+            self.available_for_write()
+        }
 
-    fn tx_byte(uart: &Uart, _port: u8, byte: u8) {
-        uart.tx(byte);
-    }
+        fn tx_byte(&self, _port: u8, byte: u8) {
+            self.tx(byte);
+        }
 
-    fn rx_byte(min: &mut min::Context<Uart>, buf: &[u8], buf_len: u32) {
-        min.poll(buf, buf_len);
+        fn tx_start(&self) {
+            print!("[ ");
+            let mut rx_buf_index = self.rx_buf_index.borrow_mut();
+            *rx_buf_index = 0;
+        }
     }
 
     #[test]
@@ -73,16 +72,12 @@ mod tests {
             &uart,
             0,
             true,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();
 
         min.reset_transport(true).unwrap();
-        rx_byte(&mut min, &uart.rx_buf.borrow()[0..255], uart.get_rx_data_len() as u32);
+        min.poll(&uart.rx_buf.borrow()[0..255], uart.get_rx_data_len() as u32);
 
         assert_eq!(min.get_reset_cnt(), 1);
 
@@ -103,10 +98,6 @@ mod tests {
             &uart,
             0,
             true,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();
@@ -140,10 +131,6 @@ mod tests {
             &uart,
             0,
             true,
-            tx_start,
-            tx_finished,
-            tx_space,
-            tx_byte,
         );
 
         uart.open();
