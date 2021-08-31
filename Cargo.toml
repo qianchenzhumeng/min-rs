@@ -10,6 +10,7 @@ log = "0.4.14"
 
 [dev-dependencies]
 env_logger = "0.9.0"
+serial = { git = "https://github.com/qianchenzhumeng/serial-rs", branch="pi"}
 
 [[example]]
 name="multithread"
@@ -19,3 +20,6 @@ name="transport"
 
 [[example]]
 name="no_transport"
+
+[[example]]
+name="real_uart_on_linux"
