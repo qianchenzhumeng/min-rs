@@ -6,33 +6,6 @@ use std::time::Duration;
 use log::{LevelFilter, info, debug, trace};
 use env_logger;
 
-struct App {
-    name: String,
-}
-
-impl min::Name for App {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-}
-
-impl App {
-    fn new(name: String) -> Self {
-        App{
-            name: name,
-        }
-    }
-    fn print_msg(&self, buffer: &[u8], len: u8) {
-        let mut output = String::from("");
-        output.push_str(format!("receive data: [ ").as_str());
-        for i in 0..len {
-            output.push_str(format!("0x{:02x} ", buffer[i as usize]).as_str());
-        }
-        output.push_str(format!("]").as_str());
-        info!(target: self.name.as_str(), "{}", output);
-    }
-}
-
 struct Uart {
     name: String,
     tx_space_avaliable: u16,
@@ -95,11 +68,7 @@ fn tx_byte(uart: &Uart, _port: u8, byte: u8) {
     uart.tx(byte);
 }
 
-fn application_handler(app: &App, _min_id: u8, buffer: &[u8], len: u8, _port: u8) {
-    app.print_msg(buffer, len);
-}
-
-fn rx_byte(min: &mut min::Context<Uart, App>, buf: &[u8], buf_len: u32) {
+fn rx_byte(min: &mut min::Context<Uart>, buf: &[u8], buf_len: u32) {
     min.poll(buf, buf_len);
 }
 
@@ -107,8 +76,6 @@ fn main() {
     let id: u8 = 0;
     let tx_data1: [u8; 8] = [0xaa, 0xaa, 0xaa, 0, 0, 0, 0, 1];
     let tx_data2: [u8; 8] = [0xbb, 0xbb, 0xbb, 0, 0, 0, 0, 1];
-    let app1 = App::new(String::from("app1"));
-    let app2 = App::new(String::from("app2"));
     let (tx1, rx2) = channel();
     let (tx2, rx1) = channel();
 
@@ -121,15 +88,14 @@ fn main() {
     let app1 = app1_builder.spawn(move || {
         let uart1 = Uart::new(String::from("uart1"), 128, tx1, rx1);
         let mut min1 = min::Context::new(
+            String::from("min1"),
             &uart1,
-            &app1,
             0,
             true,
             tx_start,
             tx_finished,
             tx_space,
-            tx_byte,
-            application_handler,
+            tx_byte
         );
         min1.hw_if.open();
 
@@ -141,6 +107,13 @@ fn main() {
                 rx_byte(&mut min1, &[byte as u8][0..1], 1);
             }
             min1.poll(&[0][0..0], 0);
+            if let Ok(msg) = min1.get_msg() {
+                print!("app1 receive data: [ ");
+                for i in 0..msg.len {
+                    print!("0x{:02x} ", msg.buf[i as usize]);
+                }
+                println!("]");
+            }
             thread::sleep(Duration::from_millis(100));
         }
 
@@ -151,15 +124,14 @@ fn main() {
     let app2 = app2_builder.spawn(move || {
         let uart2 = Uart::new(String::from("uart2"), 128, tx2, rx2);
         let mut min2 = min::Context::new(
+            String::from("min2"),
             &uart2,
-            &app2,
             0,
             true,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
         min2.hw_if.open();
 
@@ -170,6 +142,13 @@ fn main() {
                 rx_byte(&mut min2, &[byte as u8][0..1], 1);
             }
             min2.poll(&[0][0..0], 0);
+            if let Ok(msg) = min2.get_msg() {
+                print!("app2 receive data: [ ");
+                for i in 0..msg.len {
+                    print!("0x{:02x} ", msg.buf[i as usize]);
+                }
+                println!("]");
+            }
             thread::sleep(Duration::from_millis(100));
         }
 

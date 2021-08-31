@@ -1,25 +1,7 @@
 extern crate min_rs as min;
 use std::cell::RefCell;
-
-struct App {
-    name: String,
-}
-
-impl App {
-    fn print_msg(&self, buffer: &[u8], len: u8) {
-        print!("The data received: [ ");
-        for i in 0..len {
-            print!("0x{:02x} ", buffer[i as usize]);
-        }
-        println!("]");
-    }
-}
-
-impl min::Name for App {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-}
+use log::LevelFilter;
+use env_logger;
 
 struct Uart {
     tx_space_avaliable: u16,
@@ -73,21 +55,17 @@ fn tx_byte(uart: &Uart, _port: u8, byte: u8) {
     uart.tx(byte);
 }
 
-fn application_handler(app: &App, _min_id: u8, buffer: &[u8], len: u8, _port: u8) {
-    app.print_msg(buffer, len);
-}
-
-fn rx_byte(min: &mut min::Context<Uart, App>, buf: &[u8], buf_len: u32) {
+fn rx_byte(min: &mut min::Context<Uart>, buf: &[u8], buf_len: u32) {
     min.poll(buf, buf_len);
 }
 
 fn main() {
+    log::set_max_level(LevelFilter::Trace);
+    env_logger::init();
+
     let id: u8 = 0;
     let tx_data: [u8; 8] = [0xaa, 0xaa, 0xaa, 0, 0, 0, 0, 1];
     let rx_data: [u8; 255] = [0; 255];
-    let app = App{
-        name: String::from("app")
-    };
     let uart = Uart{
         tx_space_avaliable: 128,
         rx_buf: RefCell::new(rx_data),
@@ -95,15 +73,14 @@ fn main() {
         loopback: true,
     };
     let mut min = min::Context::new(
+        String::from("min"),
         &uart,
-        &app,
         0,
         false,
         tx_start,
         tx_finished,
         tx_space,
         tx_byte,
-        application_handler,
     );
 
     uart.open();
@@ -128,5 +105,12 @@ fn main() {
         println!("The checksum in frame: 0x{:x}", min.get_rx_frame_checksum());
     }
 
+    if let Ok(msg) = min.get_msg() {
+        print!("app1 receive data: [ ");
+        for i in 0..msg.len {
+            print!("0x{:02x} ", msg.buf[i as usize]);
+        }
+        println!("]");
+    }
     uart.close();
 }

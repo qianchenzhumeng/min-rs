@@ -2,20 +2,6 @@
 mod tests {
     extern crate min_rs as min;
 
-    struct App {
-        name: String,
-    }
-
-    impl App {
-        fn print_msg(&self, _buffer: &[u8], _len: u8) {}
-    }
-
-    impl min::Name for App {
-        fn name(&self) -> String {
-            self.name.clone()
-        }
-    }
-
     struct Uart {
         tx_space_avaliable: u16,
     }
@@ -37,15 +23,9 @@ mod tests {
     fn tx_byte(uart: &Uart, _port: u8, byte: u8) {
         uart.tx(byte);
     }
-    fn application_handler(app: &App, _min_id: u8, buffer: &[u8], len: u8, _port: u8) {
-        app.print_msg(buffer, len);
-    }
 
     #[test]
     fn send() {
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -53,15 +33,14 @@ mod tests {
         let payload: [u8; 255] = [0; 255];
         let len: u8 = 8;
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             false,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();
@@ -78,9 +57,6 @@ mod tests {
 
     #[test]
     fn send_no_enough_buffer() {
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -89,15 +65,14 @@ mod tests {
         let payload: [u8; 255] = [0; 255];
         let len: u8 = uart.available_for_write() as u8 + overfllow as u8;
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             false,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();
@@ -105,6 +80,7 @@ mod tests {
         let oversized = match min.send_frame(id, &payload, len) {
             Ok(_) => 0,
             Err(min::Error::NoEnoughTxSpace(size)) => size,
+            Err(min::Error::NoMsg) => 0,
         };
 
         uart.close();
@@ -114,9 +90,6 @@ mod tests {
 
     #[test]
     fn receive() {
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -129,15 +102,14 @@ mod tests {
             0x55,   // EOF
         ];
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             false,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();
@@ -151,9 +123,6 @@ mod tests {
 
     #[test]
     fn restart_receiving() {
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -169,15 +138,14 @@ mod tests {
             0x55,   // EOF
         ];
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             false,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();
@@ -192,9 +160,6 @@ mod tests {
 
     #[test]
     fn receive_frame_error_length() {
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -207,15 +172,14 @@ mod tests {
             0x55,   // EOF
         ];
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             false,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();
@@ -234,9 +198,6 @@ mod tests {
 
     #[test]
     fn receive_frame_error_checksum() {
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
         };
@@ -249,15 +210,14 @@ mod tests {
             0x55,   // EOF
         ];
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             false,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();

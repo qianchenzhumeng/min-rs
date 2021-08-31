@@ -4,26 +4,6 @@ mod tests {
     extern crate min_rs as min;
     use std::cell::RefCell;
 
-    struct App {
-        name: String,
-    }
-
-    impl App {
-        fn print_msg(&self, buffer: &[u8], len: u8) {
-            print!("The data received: [ ");
-            for i in 0..len {
-                print!("0x{:02x} ", buffer[i as usize]);
-            }
-            println!("]");
-        }
-    }
-
-    impl min::Name for App {
-        fn name(&self) -> String {
-            self.name.clone()
-        }
-    }
-
     struct Uart {
         tx_space_avaliable: u16,
         rx_buf: RefCell<[u8; 255]>,
@@ -76,19 +56,12 @@ mod tests {
         uart.tx(byte);
     }
 
-    fn application_handler(app: &App, _min_id: u8, buffer: &[u8], len: u8, _port: u8) {
-        app.print_msg(buffer, len);
-    }
-
-    fn rx_byte(min: &mut min::Context<Uart, App>, buf: &[u8], buf_len: u32) {
+    fn rx_byte(min: &mut min::Context<Uart>, buf: &[u8], buf_len: u32) {
         min.poll(buf, buf_len);
     }
 
     #[test]
     fn transport_receive_reset() {
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
             rx_buf: RefCell::new([0; 255]),
@@ -96,15 +69,14 @@ mod tests {
             loopback: true,
         };
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             true,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();
@@ -120,9 +92,6 @@ mod tests {
     #[test]
     fn transport_receive_spurious_ack() {
         let ack: [u8; 12] = [0xaa, 0xaa, 0xaa, 0xff, 0x02, 0x01, 0x02, 0x0b, 0xd0, 0x5d, 0xee, 0x55];
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
             rx_buf: RefCell::new([0; 255]),
@@ -130,15 +99,14 @@ mod tests {
             loopback: false,
         };
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             true,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();
@@ -161,9 +129,6 @@ mod tests {
             0xe6, 0x98, 0x4f, 0xde,
             0x55
         ];
-        let app = App{
-            name: String::from("app")
-        };
         let uart = Uart{
             tx_space_avaliable: 128,
             rx_buf: RefCell::new([0; 255]),
@@ -171,15 +136,14 @@ mod tests {
             loopback: false,
         };
         let mut min = min::Context::new(
+            String::from("min"),
             &uart,
-            &app,
             0,
             true,
             tx_start,
             tx_finished,
             tx_space,
             tx_byte,
-            application_handler,
         );
 
         uart.open();

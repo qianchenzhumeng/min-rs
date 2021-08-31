@@ -13,6 +13,7 @@ const CRC_REFOUT: bool = false;
 pub enum Error {
     /// There is no enough space in tx buffer. The value is the size of bytes overflowed.
     NoEnoughTxSpace(u16),
+    NoMsg,
 }
 
 /// Receiving state machine
@@ -35,19 +36,36 @@ const STUFF_BYTE: u8 = 0x55;
 const EOF_BYTE: u8 = 0x55;
 
 const MAX_PAYLOAD: u8 = u8::MAX;
+const MAX_MSG: u8 = 128;
 
-pub trait Name {
-    fn name(&self) -> String;
+pub struct Msg {
+    pub min_id: u8,
+    pub len: u8,
+    pub buf: Vec<u8>,
+    pub port: u8,
 }
 
+impl Msg {
+    fn new(min_id: u8, payload: &[u8], payload_len: u8, port: u8) ->Self {
+        let mut buf: Vec<u8> = Vec::new();
+        for i in 0..payload_len {
+            buf.push(payload[i as usize]);
+        }
+        Msg {
+            min_id: min_id,
+            len: payload_len,
+            buf: buf,
+            port: port,
+        }
+    }
+}
 /// context for MIN.
-pub struct Context<'a, 'b, T, U> where U: Name {
+pub struct Context<'a, T> {
+    pub name: String,
     /// Use transport protocol
     pub t_min:  bool,
     /// Hardwar interface
     pub hw_if: &'a T,
-    /// Application
-    pub app: &'b U,
     /// CALLBACK. Must return current buffer space.
     /// Used to check that a frame can be queued.
     pub tx_space: fn(hw_if: &'a T) -> u16,
@@ -85,11 +103,16 @@ pub struct Context<'a, 'b, T, U> where U: Name {
     rx_frame_payload_buf: [u8; MAX_PAYLOAD as usize],
     /// Checksum received over the wire
     rx_frame_checksum: u32,
-    /// CALLBACK. Handle incoming MIN frame
-    application_handler: fn(app: &'b U, min_id: u8, buffer: &[u8], len: u8, port: u8),
+    msg_queue: Vec<Msg>,
 }
 
-impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
+impl<'a, T> Context<'a, T> {
+    
+    fn msg_enqueue(&mut self) {
+        let msg = Msg::new(self.rx_frame_id_control & 0x3f, &self.rx_frame_payload_buf, self.rx_control, self.port);
+        self.msg_queue.push(msg);
+    }
+
     /// Number of bytes needed for a frame with a given payload length, excluding stuff bytes
     /// 3 header bytes, ID/control byte, length byte, seq byte, 4 byte CRC, EOF byte
     fn on_wire_size(&self, payload_len: u8) -> u16 {
@@ -164,11 +187,11 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
     fn on_wire_t_frame(&mut self, id: u8, seq: u8, payload: &[u8], len: u8) -> Result<u8, Error> {
         let avaliable_for_send = (self.tx_space)(&self.hw_if);
         if self.on_wire_size(len) <= avaliable_for_send {
-            trace!(target: format!("{}", self.app.name()).as_str(), "on_wire_t_frame: min_id={}, seq={}, payload_len={}", id, seq, len);
+            trace!(target: format!("{}", self.name).as_str(), "on_wire_t_frame: min_id={}, seq={}, payload_len={}", id, seq, len);
             self.on_wire_bytes(id | 0x80_u8, seq, payload, 0, 0xffff, len);
             Ok(len)
         } else {
-            warn!(target: format!("{}", self.app.name()).as_str(), "no enough tx space: oversize={}", (len as u16) - avaliable_for_send);
+            warn!(target: format!("{}", self.name).as_str(), "no enough tx space: oversize={}", (len as u16) - avaliable_for_send);
             Err(Error::NoEnoughTxSpace((len as u16) - avaliable_for_send))
         }
     }
@@ -185,7 +208,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
         }
         // 这个地方有点疑惑，为什么必须是 `&mut frame`，去掉 `&mut` 会因两次可变借用而编译失败，进一步改为 `get` 后，会因可变借用和不可变借用同时发生而编译失败
         if let Some(&mut frame) = self.transport.frames.get_mut(idx) {
-            debug!(target: format!("{}", self.app.name()).as_str(), "send T-Frame: id={}, seq={}, len={}", frame.min_id, frame.seq, frame.payload_len);
+            debug!(target: format!("{}", self.name).as_str(), "send T-Frame: id={}, seq={}, len={}", frame.min_id, frame.seq, frame.payload_len);
             self.on_wire_t_frame(frame.min_id, frame.seq, &frame.payload[0..frame.payload_len as usize], frame.payload_len).unwrap_or(0);
         }
     }
@@ -209,9 +232,9 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                         self.transport.sn_min = self.rx_frame_seq;
                         // Now pop off all the frames up to (but not including) rn
                         // The ACK contains Rn; all frames before Rn are ACKed and can be removed from the window
-                        debug!(target: format!("{}", self.app.name()).as_str(), "Received ACK seq={}, num_acked={}, num_nacked={}", self.rx_frame_seq, num_acked, num_nacked);
+                        debug!(target: format!("{}", self.name).as_str(), "Received ACK seq={}, num_acked={}, num_nacked={}", self.rx_frame_seq, num_acked, num_nacked);
                         for _ in 0..num_acked {
-                            debug!(target: format!("{}", self.app.name()).as_str(), "Pop transport fifo.");
+                            debug!(target: format!("{}", self.name).as_str(), "Pop transport fifo.");
                             self.transport.pop();
                         }
                         // Now retransmit the number of frames that were requested
@@ -219,7 +242,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                             self.transport_fifo_frame_send(i.into(), false);
                         }
                     } else {
-                        debug!(target: format!("{}", self.app.name()).as_str(), "Received spurious ACK seq={}", self.rx_frame_seq);
+                        debug!(target: format!("{}", self.name).as_str(), "Received spurious ACK seq={}", self.rx_frame_seq);
                         self.transport.spurious_acks = self.transport.spurious_acks.wrapping_add(1);
                     }
                 },
@@ -237,7 +260,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                         // Reset the activity time (an idle connection will be stalled)
                         self.transport.last_received_frame_ms = now;
                         if self.rx_frame_seq == self.transport.rn {
-                            debug!(target: format!("{}", self.app.name()).as_str(), "Incoming T-MIN frame seq={}, id={}, payload len={}",
+                            debug!(target: format!("{}", self.name).as_str(), "Incoming T-MIN frame seq={}, id={}, payload len={}",
                                 self.rx_frame_seq, self.rx_frame_id_control & 0x3f, self.rx_control);
                             // Now looking for the next one in the sequence
                             self.transport.rn = self.transport.rn.wrapping_add(1);
@@ -249,44 +272,25 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                             self.send_ack();
                             // Now ready to pass this up to the application handlers
 
-                            // Pass frame up to application handler to deal with
-                            (self.application_handler)(
-                                self.app,
-                                self.rx_frame_id_control & 0x3f,
-                                &self.rx_frame_payload_buf,
-                                self.rx_control,
-                                self.port,
-                            );
+                            self.msg_enqueue();
                         } else {
                             // Discard this frame because we aren't looking for it: it's either a dupe because it was
                             // retransmitted when our ACK didn't get through in time, or else it's further on in the
                             // sequence and others got dropped.
-                            warn!(target: format!("{}", self.app.name()).as_str(), "sequence mismatch: seq={}, rn={}", self.rx_frame_seq, self.transport.rn);
+                            warn!(target: format!("{}", self.name).as_str(), "sequence mismatch: seq={}, rn={}", self.rx_frame_seq, self.transport.rn);
                             self.transport.sequence_mismatch_drop = self.transport.sequence_mismatch_drop.wrapping_add(1);
                         }
                     } else {
-                        debug!(target: format!("{}", self.app.name()).as_str(), "Incoming MIN frame id={}, payload len={}", self.rx_frame_id_control & 0x3f, self.rx_control);
+                        debug!(target: format!("{}", self.name).as_str(), "Incoming MIN frame id={}, payload len={}", self.rx_frame_id_control & 0x3f, self.rx_control);
                         // Not a transport frame
-                        (self.application_handler)(
-                            self.app,
-                            self.rx_frame_id_control & 0x3f,
-                            &self.rx_frame_payload_buf,
-                            self.rx_control,
-                            self.port,
-                        );
+                        self.msg_enqueue();
                     }
                 },
             }
         } else {
-            debug!(target: format!("{}", self.app.name()).as_str(), "Incoming app frame id={}, payload len={}",
+            debug!(target: format!("{}", self.name).as_str(), "Incoming app frame id={}, payload len={}",
                 self.rx_frame_id_control & 0x3f, self.rx_control);
-            (self.application_handler)(
-                self.app,
-                self.rx_frame_id_control & 0x3f,
-                &self.rx_frame_payload_buf,
-                self.rx_control,
-                self.port,
-            );
+                self.msg_enqueue();
         }
     }
 
@@ -331,7 +335,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                         self.rx_frame_state = RxState::ReceivingSeq;
                     } else {
                         // If there is no transport support compiled in then all transport frames are ignored
-                        warn!(target: format!("{}", self.app.name()).as_str(), "no transport support, drop this frame.");
+                        warn!(target: format!("{}", self.name).as_str(), "no transport support, drop this frame.");
                         self.rx_frame_state = RxState::SearchingForSof;
                     }
                 } else {
@@ -385,7 +389,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                 let crc = self.rx_checksum.finalize();
                 if crc != self.rx_frame_checksum {
                     // Frame fails the checksum and so is dropped
-                    warn!(target: format!("{}", self.app.name()).as_str(), "crc error, drop this frame.");
+                    warn!(target: format!("{}", self.name).as_str(), "crc error, drop this frame.");
                     self.rx_frame_state = RxState::SearchingForSof;
                 } else {
                     // Checksum passes, go on to check for the end-of-frame marker
@@ -429,49 +433,47 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
         if self.transport.n_frames_max < self.transport.n_frames {
             self.transport.n_frames_max = self.transport.n_frames;
         }
-        debug!(target: format!("{}", self.app.name()).as_str(), "Queued ID={}, len={}", frame.min_id, frame.payload_len);
+        debug!(target: format!("{}", self.name).as_str(), "Queued ID={}, len={}", frame.min_id, frame.payload_len);
     }
 
     fn send_ack(&mut self) {
         let now =SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
-        debug!(target: format!("{}", self.app.name()).as_str(), "send ACK: seq={}", self.transport.rn);
+        debug!(target: format!("{}", self.name).as_str(), "send ACK: seq={}", self.transport.rn);
         self.on_wire_t_frame(ACK, self.transport.rn, &[self.transport.rn][0..1], 1).unwrap_or(0);
         self.transport.last_sent_ack_time_ms = now;
     }
 
     fn send_reset(&mut self) {
-        debug!(target: format!("{}", self.app.name()).as_str(), "send RESET");
+        debug!(target: format!("{}", self.name).as_str(), "send RESET");
         self.on_wire_bytes(RESET, 0, &[0][0..0], 0, 0, 0);
     }
 }
 
-impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
+impl<'a, T> Context<'a, T> {
     /// Construct a `Context` for MIN.
     /// # Arguments
+    /// * `name` - identifier string for debug.
     /// * `hw_if` - Reference of hardware interface.
-    /// * `app` - Reference of application.
     /// * `port` - Number of the port associated with the context.
     /// * `t_min` - Use transport protocol.
     /// * `tx_start` - Callback. Indcates when frame transmission is starting.
     /// * `tx_finished` - Callback. Indcates when frame transmission is finished.
     /// * `tx_space` - Callback. Returns current buffer space.
     /// * `tx_byte` - Callback. Sends a byte on the given line.
-    /// * `application_handler` - Callback. Handle incoming MIN frame.
     pub fn new(
+        name: String,
         hw_if: &'a T,
-        app: &'b U,
         port: u8,
         t_min: bool,
         tx_start: fn(hw_if: &'a T),
         tx_finished: fn(hw_if: &'a T),
         tx_space: fn(hw_if: &'a T) -> u16,
         tx_byte: fn(hw_if: &'a T, port: u8, byte: u8),
-        application_handler: fn(app: &'b U, min_id: u8, buffer: &[u8], len: u8, port: u8),
     ) -> Self {
         Context {
             transport: Transport::new(),
             hw_if: hw_if,
-            app: app,
+            name: name,
             port: port,
             t_min: t_min,
             tx_start: tx_start,
@@ -490,7 +492,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
             rx_control: 0,
             rx_frame_payload_buf: [0; MAX_PAYLOAD as usize],
             rx_frame_checksum: 0,
-            application_handler: application_handler,
+            msg_queue: Vec::with_capacity(MAX_MSG as usize),
         }
     }
 
@@ -512,14 +514,14 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
 
     pub fn reset_transport(&mut self, inform_other_side: bool) -> Result<(), String> {
         if self.t_min {
-            debug!(target: format!("{}", self.app.name()).as_str(), "reset transport(clear the fifo, restart timing).");
+            debug!(target: format!("{}", self.name).as_str(), "reset transport(clear the fifo, restart timing).");
             if inform_other_side {
                 self.send_reset();
             }
             self.transport.reset_transport_fifo();
             Ok(())
         } else {
-            warn!(target: format!("{}", self.app.name()).as_str(), "no transport support.");
+            warn!(target: format!("{}", self.name).as_str(), "no transport support.");
             Err(String::from("no transport support."))
         }
     }
@@ -532,7 +534,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
             self.push(frame);
             Ok(())
         } else {
-            warn!(target: format!("{}", self.app.name()).as_str(), "no transport support.");
+            warn!(target: format!("{}", self.name).as_str(), "no transport support.");
             Err(String::from("no transport support."))
         }
     }
@@ -556,7 +558,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
             }
             let window_size = self.transport.sn_max - self.transport.sn_min;
             if (window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self.transport.n_frames > window_size) {
-                debug!(target: format!("{}", self.app.name()).as_str(), "Send new frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
+                debug!(target: format!("{}", self.name).as_str(), "Send new frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
                     window_size, self.transport.sn_max, self.transport.sn_min, self.transport.n_frames
                 );
                 // There are new frames we can send; but don't even bother if there's no buffer space for them
@@ -569,7 +571,7 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
                     let (index, last_sent_time_ms) = self.find_retransmit_frame();
                     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
                     if now - last_sent_time_ms >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS {
-                        debug!(target: format!("{}", self.app.name()).as_str(), "Send old frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
+                        debug!(target: format!("{}", self.name).as_str(), "Send old frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
                             window_size, self.transport.sn_max, self.transport.sn_min, self.transport.n_frames
                         );
                         self.transport_fifo_frame_send(index, false);
@@ -586,6 +588,16 @@ impl<'a, 'b, T, U> Context<'a, 'b, T, U> where U: Name {
         }
     }
 
+    pub fn get_msg(&mut self) -> Result<Msg, Error> {
+        match self.msg_queue.pop() {
+            Some(msg) => {
+                Ok(msg)
+            },
+            None => {
+                Err(Error::NoMsg)
+            }
+        }
+    }
     pub fn get_rx_checksum(&self) -> u32 {
         self.rx_checksum.finalize()
     }
