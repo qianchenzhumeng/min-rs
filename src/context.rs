@@ -215,9 +215,9 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
                     // The payload byte specifies the number of NACKed frames: how many we want retransmitted because
                     // they have gone missing.
                     // But we need to make sure we don't accidentally ACK too many because of a stale ACK from an old session
-                    let num_acked = self.rx_frame_seq - self.transport.sn_min;
-                    let num_nacked = self.rx_frame_payload_buf[0] - self.rx_frame_seq;  // 好像一直会是 0
-                    let num_in_window = self.transport.sn_max - self.transport.sn_min;
+                    let num_acked = self.rx_frame_seq.wrapping_sub(self.transport.sn_min);
+                    let num_nacked = self.rx_frame_payload_buf[0].wrapping_sub(self.rx_frame_seq);  // 好像一直会是 0
+                    let num_in_window = self.transport.sn_max.wrapping_sub(self.transport.sn_min);
                     if num_acked <= num_in_window {
                         self.transport.sn_min = self.rx_frame_seq;
                         // Now pop off all the frames up to (but not including) rn
@@ -400,13 +400,13 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
 
     fn find_retransmit_frame(&mut self) -> (usize, u128) {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
-        let window_size = self.transport.sn_max - self.transport.sn_min;
+        let window_size = self.transport.sn_max.wrapping_sub(self.transport.sn_min);
         let mut oldest_elapsed_time: u128 = 0;
         let mut oldest_frame_index: usize = 0;
         let mut last_sent_time_ms = 0;
         for i in 0..window_size {
             if let Some(frame) = self.transport.frames.get(i.into()) {
-                let elapsed = now - frame.last_sent_time_ms;
+                let elapsed = now.wrapping_sub(frame.last_sent_time_ms);
                 if elapsed > oldest_elapsed_time {
                     oldest_elapsed_time = elapsed;
                     oldest_frame_index = i.into();
@@ -532,13 +532,13 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
             let mut remote_connected = false;
             let mut remote_active = false;
-            if now - self.transport.last_received_anything_ms < TRANSPORT_IDLE_TIMEOUT_MS {
+            if now.wrapping_sub(self.transport.last_received_anything_ms) < TRANSPORT_IDLE_TIMEOUT_MS {
                 remote_connected = true;
             }
-            if now - self.transport.last_received_frame_ms < TRANSPORT_IDLE_TIMEOUT_MS {
+            if now.wrapping_sub(self.transport.last_received_frame_ms) < TRANSPORT_IDLE_TIMEOUT_MS {
                 remote_active = true;
             }
-            let window_size = self.transport.sn_max - self.transport.sn_min;
+            let window_size = self.transport.sn_max.wrapping_sub(self.transport.sn_min);
             if (window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self.transport.n_frames > window_size) {
                 debug!(target: format!("{}", self.name).as_str(), "Send new frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
                     window_size, self.transport.sn_max, self.transport.sn_min, self.transport.n_frames
@@ -552,7 +552,7 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
                     // There are unacknowledged frames. Can re-send an old frame. Pick the least recently sent one.
                     let (index, last_sent_time_ms) = self.find_retransmit_frame();
                     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
-                    if now - last_sent_time_ms >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS {
+                    if now.wrapping_sub(last_sent_time_ms) >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS {
                         debug!(target: format!("{}", self.name).as_str(), "Send old frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
                             window_size, self.transport.sn_max, self.transport.sn_min, self.transport.n_frames
                         );
@@ -562,7 +562,7 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
             }
     
             // 发送 ack
-            if now - self.transport.last_sent_ack_time_ms > TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS {
+            if now.wrapping_sub(self.transport.last_sent_ack_time_ms) > TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS {
                 if remote_active {
                     self.send_ack();
                 }
