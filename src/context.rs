@@ -3,6 +3,7 @@ use crate::crc::Crc32Context;
 use crate::transport::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 use log::{warn, debug, trace};
+use std::collections::VecDeque;
 
 const CRC_SEED: u32 = 0xffffffff;
 const CRC_REVERSED: bool = true;
@@ -93,14 +94,14 @@ pub struct Context<'a, T> where T: crate::Interface {
     rx_frame_payload_buf: [u8; MAX_PAYLOAD as usize],
     /// Checksum received over the wire
     rx_frame_checksum: u32,
-    msg_queue: Vec<Msg>,
+    msg_queue: VecDeque<Msg>,
 }
 
 impl<'a, T> Context<'a, T> where T: crate::Interface {
     
     fn msg_enqueue(&mut self) {
         let msg = Msg::new(self.rx_frame_id_control & 0x3f, &self.rx_frame_payload_buf, self.rx_control, self.port);
-        self.msg_queue.push(msg);
+        self.msg_queue.push_back(msg);
     }
 
     /// Number of bytes needed for a frame with a given payload length, excluding stuff bytes
@@ -474,7 +475,7 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
             rx_control: 0,
             rx_frame_payload_buf: [0; MAX_PAYLOAD as usize],
             rx_frame_checksum: 0,
-            msg_queue: Vec::with_capacity(MAX_MSG as usize),
+            msg_queue: VecDeque::with_capacity(MAX_MSG as usize),
         }
     }
 
@@ -571,7 +572,7 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
     }
 
     pub fn get_msg(&mut self) -> Result<Msg, Error> {
-        match self.msg_queue.pop() {
+        match self.msg_queue.pop_front() {
             Some(msg) => {
                 Ok(msg)
             },
