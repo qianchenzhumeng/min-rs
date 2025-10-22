@@ -1,9 +1,9 @@
 extern crate log;
 use crate::crc::Crc32Context;
 use crate::transport::*;
-use std::time::{SystemTime, UNIX_EPOCH};
-use log::{warn, debug, trace};
+use log::{debug, trace, warn};
 use std::collections::VecDeque;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const CRC_SEED: u32 = 0xffffffff;
 const CRC_REVERSED: bool = true;
@@ -47,7 +47,7 @@ pub struct Msg {
 }
 
 impl Msg {
-    fn new(min_id: u8, payload: &[u8], payload_len: u8, port: u8) ->Self {
+    fn new(min_id: u8, payload: &[u8], payload_len: u8, port: u8) -> Self {
         let mut buf: Vec<u8> = Vec::new();
         for i in 0..payload_len {
             buf.push(payload[i as usize]);
@@ -61,12 +61,15 @@ impl Msg {
     }
 }
 /// context for MIN.
-pub struct Context<'a, T> where T: crate::Interface {
+pub struct Context<T>
+where
+    T: crate::Interface,
+{
     pub name: String,
     /// Use transport protocol
-    pub t_min:  bool,
+    pub t_min: bool,
     /// Hardwar interface
-    pub hw_if: &'a T,
+    pub hw_if: T,
     transport: Transport,
     /// Number of the port associated with the context
     port: u8,
@@ -97,10 +100,17 @@ pub struct Context<'a, T> where T: crate::Interface {
     msg_queue: VecDeque<Msg>,
 }
 
-impl<'a, T> Context<'a, T> where T: crate::Interface {
-    
+impl<T> Context<T>
+where
+    T: crate::Interface,
+{
     fn msg_enqueue(&mut self) {
-        let msg = Msg::new(self.rx_frame_id_control & 0x3f, &self.rx_frame_payload_buf, self.rx_control, self.port);
+        let msg = Msg::new(
+            self.rx_frame_id_control & 0x3f,
+            &self.rx_frame_payload_buf,
+            self.rx_control,
+            self.port,
+        );
         self.msg_queue.push_back(msg);
     }
 
@@ -188,10 +198,13 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
     }
 
     fn transport_fifo_frame_send(&mut self, idx: usize, update_seq: bool) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_millis();
         self.transport.last_received_anything_ms = now;
         // 这个地方需要发送找到的 frame，并且修改该 frame 的最后发送时间。由于借用规则的限制，需要分两步完成。
-        if let Some(mut frame) = self.transport.frames.get_mut(idx) {
+        if let Some(frame) = self.transport.frames.get_mut(idx) {
             frame.last_sent_time_ms = now;
             if update_seq {
                 frame.seq = self.transport.sn_max;
@@ -200,7 +213,13 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
         // 这个地方有点疑惑，为什么必须是 `&mut frame`，去掉 `&mut` 会因两次可变借用而编译失败，进一步改为 `get` 后，会因可变借用和不可变借用同时发生而编译失败
         if let Some(&mut frame) = self.transport.frames.get_mut(idx) {
             debug!(target: format!("{}", self.name).as_str(), "send T-Frame: id={}, seq={}, len={}", frame.min_id, frame.seq, frame.payload_len);
-            self.on_wire_t_frame(frame.min_id, frame.seq, &frame.payload[0..frame.payload_len as usize], frame.payload_len).unwrap_or(0);
+            self.on_wire_t_frame(
+                frame.min_id,
+                frame.seq,
+                &frame.payload[0..frame.payload_len as usize],
+                frame.payload_len,
+            )
+            .unwrap_or(0);
         }
     }
 
@@ -208,7 +227,10 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
     /// duplicates received, and handling RESET requests.
     fn valid_frame_received(&mut self) {
         if self.t_min {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_millis();
             self.transport.last_received_anything_ms = now;
             match self.rx_frame_id_control {
                 ACK => {
@@ -217,7 +239,7 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
                     // they have gone missing.
                     // But we need to make sure we don't accidentally ACK too many because of a stale ACK from an old session
                     let num_acked = self.rx_frame_seq.wrapping_sub(self.transport.sn_min);
-                    let num_nacked = self.rx_frame_payload_buf[0].wrapping_sub(self.rx_frame_seq);  // 好像一直会是 0
+                    let num_nacked = self.rx_frame_payload_buf[0].wrapping_sub(self.rx_frame_seq); // 好像一直会是 0
                     let num_in_window = self.transport.sn_max.wrapping_sub(self.transport.sn_min);
                     if num_acked <= num_in_window {
                         self.transport.sn_min = self.rx_frame_seq;
@@ -236,7 +258,7 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
                         debug!(target: format!("{}", self.name).as_str(), "Received spurious ACK seq={}", self.rx_frame_seq);
                         self.transport.spurious_acks = self.transport.spurious_acks.wrapping_add(1);
                     }
-                },
+                }
                 RESET => {
                     // If we get a RESET demand then we reset the transport protocol (empty the FIFO, reset the
                     // sequence numbers, etc.)
@@ -244,7 +266,7 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
                     // alive (pings, etc.) or just wait to get application frames.
                     self.transport.resets_received = self.transport.resets_received.wrapping_add(1);
                     self.transport.reset_transport_fifo();
-                },
+                }
                 _ => {
                     if self.rx_frame_id_control & 0x80 == 0x80 {
                         // Incoming application frames
@@ -269,19 +291,20 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
                             // retransmitted when our ACK didn't get through in time, or else it's further on in the
                             // sequence and others got dropped.
                             warn!(target: format!("{}", self.name).as_str(), "sequence mismatch: seq={}, rn={}", self.rx_frame_seq, self.transport.rn);
-                            self.transport.sequence_mismatch_drop = self.transport.sequence_mismatch_drop.wrapping_add(1);
+                            self.transport.sequence_mismatch_drop =
+                                self.transport.sequence_mismatch_drop.wrapping_add(1);
                         }
                     } else {
                         debug!(target: format!("{}", self.name).as_str(), "Incoming MIN frame id={}, payload len={}", self.rx_frame_id_control & 0x3f, self.rx_control);
                         // Not a transport frame
                         self.msg_enqueue();
                     }
-                },
+                }
             }
         } else {
             debug!(target: format!("{}", self.name).as_str(), "Incoming app frame id={}, payload len={}",
                 self.rx_frame_id_control & 0x3f, self.rx_control);
-                self.msg_enqueue();
+            self.msg_enqueue();
         }
     }
 
@@ -400,7 +423,10 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
     }
 
     fn find_retransmit_frame(&mut self) -> (usize, u128) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_millis();
         let window_size = self.transport.sn_max.wrapping_sub(self.transport.sn_min);
         let mut oldest_elapsed_time: u128 = 0;
         let mut oldest_frame_index: usize = 0;
@@ -428,9 +454,13 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
     }
 
     fn send_ack(&mut self) {
-        let now =SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_millis();
         debug!(target: format!("{}", self.name).as_str(), "send ACK: seq={}", self.transport.rn);
-        self.on_wire_t_frame(ACK, self.transport.rn, &[self.transport.rn][0..1], 1).unwrap_or(0);
+        self.on_wire_t_frame(ACK, self.transport.rn, &[self.transport.rn][0..1], 1)
+            .unwrap_or(0);
         self.transport.last_sent_ack_time_ms = now;
     }
 
@@ -440,7 +470,10 @@ impl<'a, T> Context<'a, T> where T: crate::Interface {
     }
 }
 
-impl<'a, T> Context<'a, T> where T: crate::Interface{
+impl<T> Context<T>
+where
+    T: crate::Interface,
+{
     /// Construct a `Context` for MIN.
     /// # Arguments
     /// * `name` - identifier string for debug.
@@ -451,12 +484,7 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
     /// * `tx_finished` - Callback. Indcates when frame transmission is finished.
     /// * `tx_space` - Callback. Returns current buffer space.
     /// * `tx_byte` - Callback. Sends a byte on the given line.
-    pub fn new(
-        name: String,
-        hw_if: &'a T,
-        port: u8,
-        t_min: bool,
-    ) -> Self {
+    pub fn new(name: String, hw_if: T, port: u8, t_min: bool) -> Self {
         Context {
             transport: Transport::new(),
             hw_if: hw_if,
@@ -530,17 +558,23 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
 
         // for T-MIN
         if self.t_min {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_millis();
             let mut remote_connected = false;
             let mut remote_active = false;
-            if now.wrapping_sub(self.transport.last_received_anything_ms) < TRANSPORT_IDLE_TIMEOUT_MS {
+            if now.wrapping_sub(self.transport.last_received_anything_ms)
+                < TRANSPORT_IDLE_TIMEOUT_MS
+            {
                 remote_connected = true;
             }
             if now.wrapping_sub(self.transport.last_received_frame_ms) < TRANSPORT_IDLE_TIMEOUT_MS {
                 remote_active = true;
             }
             let window_size = self.transport.sn_max.wrapping_sub(self.transport.sn_min);
-            if (window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self.transport.n_frames > window_size) {
+            if (window_size < TRANSPORT_MAX_WINDOW_SIZE) && (self.transport.n_frames > window_size)
+            {
                 debug!(target: format!("{}", self.name).as_str(), "Send new frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
                     window_size, self.transport.sn_max, self.transport.sn_min, self.transport.n_frames
                 );
@@ -552,8 +586,12 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
                 if (window_size > 0) && remote_connected {
                     // There are unacknowledged frames. Can re-send an old frame. Pick the least recently sent one.
                     let (index, last_sent_time_ms) = self.find_retransmit_frame();
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
-                    if now.wrapping_sub(last_sent_time_ms) >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or(std::time::Duration::from_secs(0))
+                        .as_millis();
+                    if now.wrapping_sub(last_sent_time_ms) >= TRANSPORT_FRAME_RETRANSMIT_TIMEOUT_MS
+                    {
                         debug!(target: format!("{}", self.name).as_str(), "Send old frames(window_size={}, sn_max={}, sn_min={}, n_frames={})",
                             window_size, self.transport.sn_max, self.transport.sn_min, self.transport.n_frames
                         );
@@ -561,9 +599,11 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
                     }
                 }
             }
-    
+
             // 发送 ack
-            if now.wrapping_sub(self.transport.last_sent_ack_time_ms) > TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS {
+            if now.wrapping_sub(self.transport.last_sent_ack_time_ms)
+                > TRANSPORT_ACK_RETRANSMIT_TIMEOUT_MS
+            {
                 if remote_active {
                     self.send_ack();
                 }
@@ -573,12 +613,8 @@ impl<'a, T> Context<'a, T> where T: crate::Interface{
 
     pub fn get_msg(&mut self) -> Result<Msg, Error> {
         match self.msg_queue.pop_front() {
-            Some(msg) => {
-                Ok(msg)
-            },
-            None => {
-                Err(Error::NoMsg)
-            }
+            Some(msg) => Ok(msg),
+            None => Err(Error::NoMsg),
         }
     }
     pub fn get_rx_checksum(&self) -> u32 {

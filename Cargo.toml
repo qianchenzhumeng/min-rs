@@ -1,6 +1,6 @@
 [package]
 name = "min-rs"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["qianchenzhumeng <qianchenzhumeng@live.cn>"]
 description = "The MIN(Microcontroller Interconnect Network) protocol Rust Library."
 edition = "2018"
@@ -10,7 +10,8 @@ log = "0.4.14"
 
 [dev-dependencies]
 env_logger = "0.9.0"
-serial = { git = "https://github.com/qianchenzhumeng/serial-rs", branch="pi"}
+serialport = "4.0.0"
+clap = "2"
 
 [[example]]
 name="multithread"
@@ -22,4 +23,4 @@ name="transport"
 name="no_transport"
 
 [[example]]
-name="real_uart_on_linux"
+name="real_uart"

@@ -1,7 +1,7 @@
 extern crate min_rs as min;
-use std::cell::RefCell;
-use log::LevelFilter;
 use env_logger;
+use log::LevelFilter;
+use std::cell::RefCell;
 
 struct Uart {
     tx_space_avaliable: u16,
@@ -44,14 +44,14 @@ impl min::Interface for Uart {
         let mut rx_buf_index = self.rx_buf_index.borrow_mut();
         *rx_buf_index = 0;
     }
-    
+
     fn tx_finished(&self) {
         println!("]");
     }
     fn tx_space(&self) -> u16 {
         self.available_for_write()
     }
-    
+
     fn tx_byte(&self, _port: u8, byte: u8) {
         self.tx(byte);
     }
@@ -64,26 +64,18 @@ fn main() {
     let id: u8 = 0;
     let tx_data: [u8; 8] = [0xaa, 0xaa, 0xaa, 0, 0, 0, 0, 1];
     let rx_data: [u8; 255] = [0; 255];
-    let uart = Uart{
+    let uart = Uart {
         tx_space_avaliable: 128,
         rx_buf: RefCell::new(rx_data),
         rx_buf_index: RefCell::new(0),
         loopback: true,
     };
-    let mut min = min::Context::new(
-        String::from("min"),
-        &uart,
-        0,
-        false,
-    );
 
     uart.open();
 
-    print!("The data to be sent: [");
-    for item in tx_data {
-        print!(" 0x{:x}", item);
-    }
-    println!(" ]");
+    let mut min = min::Context::new(String::from("min"), uart, 0, false);
+
+    println!("The data to be sent: {:02X?}", tx_data);
 
     print!("MIN Frame: ");
     let sent = match min.send_frame(id, &tx_data, tx_data.len() as u8) {
@@ -92,19 +84,15 @@ fn main() {
     };
 
     assert_eq!(tx_data.len(), sent as usize);
-
-    min.poll(&uart.rx_buf.borrow()[0..255], uart.get_rx_data_len() as u32);
+    let buf = min.hw_if.rx_buf.borrow()[0..255].to_vec();
+    min.poll(&buf, min.hw_if.get_rx_data_len() as u32);
 
     if 0 != min.get_rx_frame_len() {
         println!("The checksum in frame: 0x{:x}", min.get_rx_frame_checksum());
     }
 
     if let Ok(msg) = min.get_msg() {
-        print!("app1 receive data: [ ");
-        for i in 0..msg.len {
-            print!("0x{:02x} ", msg.buf[i as usize]);
-        }
-        println!("]");
+        println!("app receive data: {:02X?}", msg.buf);
     }
-    uart.close();
+    min.hw_if.close();
 }

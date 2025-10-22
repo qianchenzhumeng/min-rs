@@ -28,48 +28,38 @@ mod tests {
 
     #[test]
     fn send() {
-        let uart = Uart{
+        let uart = Uart {
             tx_space_avaliable: 128,
         };
         let id: u8 = 0;
         let payload: [u8; 255] = [0; 255];
         let len: u8 = 8;
-        let mut min = min::Context::new(
-            String::from("min"),
-            &uart,
-            0,
-            false,
-        );
+        let mut min = min::Context::new(String::from("min"), uart, 0, false);
 
-        uart.open();
+        min.hw_if.open();
 
         let sent = match min.send_frame(id, &payload, len) {
             Ok(size) => size,
             Err(_) => panic!("Opps!"),
         };
 
-        uart.close();
+        min.hw_if.close();
 
         assert_eq!(len, sent);
     }
 
     #[test]
     fn send_no_enough_buffer() {
-        let uart = Uart{
+        let uart = Uart {
             tx_space_avaliable: 128,
         };
         let overfllow: u16 = 1;
         let id: u8 = 0;
         let payload: [u8; 255] = [0; 255];
         let len: u8 = uart.available_for_write() as u8 + overfllow as u8;
-        let mut min = min::Context::new(
-            String::from("min"),
-            &uart,
-            0,
-            false,
-        );
+        let mut min = min::Context::new(String::from("min"), uart, 0, false);
 
-        uart.open();
+        min.hw_if.open();
 
         let oversized = match min.send_frame(id, &payload, len) {
             Ok(_) => 0,
@@ -77,68 +67,60 @@ mod tests {
             Err(min::Error::NoMsg) => 0,
         };
 
-        uart.close();
+        min.hw_if.close();
 
         assert_eq!(overfllow, oversized);
     }
 
     #[test]
     fn receive() {
-        let uart = Uart{
+        let uart = Uart {
             tx_space_avaliable: 128,
         };
         let payload: [u8; 19] = [
-            0xaa, 0xaa, 0xaa,   // SOF
-            0x00,   // ID/control
-            0x08,   // Length
-            0xaa, 0xaa, 0x55, 0xaa, 0x00, 0x00, 0x00, 0x00, 0x00,   // Data(including a stuff-byte 0x55)
+            0xaa, 0xaa, 0xaa, // SOF
+            0x00, // ID/control
+            0x08, // Length
+            0xaa, 0xaa, 0x55, 0xaa, 0x00, 0x00, 0x00, 0x00,
+            0x00, // Data(including a stuff-byte 0x55)
             0x38, 0x83, 0x8f, 0x82, // CRC checksum
-            0x55,   // EOF
+            0x55, // EOF
         ];
-        let mut min = min::Context::new(
-            String::from("min"),
-            &uart,
-            0,
-            false,
-        );
+        let mut min = min::Context::new(String::from("min"), uart, 0, false);
 
-        uart.open();
+        min.hw_if.open();
 
         min.poll(&payload, payload.len() as u32);
 
-        uart.close();
+        min.hw_if.close();
 
         assert_eq!(0x38838f82, min.get_rx_frame_checksum());
     }
 
     #[test]
     fn restart_receiving() {
-        let uart = Uart{
+        let uart = Uart {
             tx_space_avaliable: 128,
         };
         let payload: [u8; 24] = [
-            0xaa, 0xaa, 0xaa,   // SOF
-            0x00,   // ID/control
-            0x08,   // Length
-            0xaa, 0xaa, 0xaa,   // SOF
-            0x00,   // ID/control
-            0x08,   // Length
-            0xaa, 0xaa, 0x55, 0xaa, 0x00, 0x00, 0x00, 0x00, 0x00,   // Data(including a stuff-byte 0x55)
+            0xaa, 0xaa, 0xaa, // SOF
+            0x00, // ID/control
+            0x08, // Length
+            0xaa, 0xaa, 0xaa, // SOF
+            0x00, // ID/control
+            0x08, // Length
+            0xaa, 0xaa, 0x55, 0xaa, 0x00, 0x00, 0x00, 0x00,
+            0x00, // Data(including a stuff-byte 0x55)
             0x38, 0x83, 0x8f, 0x82, // CRC checksum
-            0x55,   // EOF
+            0x55, // EOF
         ];
-        let mut min = min::Context::new(
-            String::from("min"),
-            &uart,
-            0,
-            false,
-        );
+        let mut min = min::Context::new(String::from("min"), uart, 0, false);
 
-        uart.open();
+        min.hw_if.open();
 
         min.poll(&payload, payload.len() as u32);
 
-        uart.close();
+        min.hw_if.close();
 
         assert_eq!(0x38838f82, min.get_rx_frame_checksum());
         assert_eq!(8, min.get_rx_frame_len());
@@ -146,29 +128,25 @@ mod tests {
 
     #[test]
     fn receive_frame_error_length() {
-        let uart = Uart{
+        let uart = Uart {
             tx_space_avaliable: 128,
         };
         let payload: [u8; 19] = [
-            0xaa, 0xaa, 0xaa,   // SOF
-            0x00,   // ID/control
-            0x02,   // Length(correct value is 8)
-            0xaa, 0xaa, 0x55, 0xaa, 0x00, 0x00, 0x00, 0x00, 0x00,   // Data(including a stuff-byte 0x55)
+            0xaa, 0xaa, 0xaa, // SOF
+            0x00, // ID/control
+            0x02, // Length(correct value is 8)
+            0xaa, 0xaa, 0x55, 0xaa, 0x00, 0x00, 0x00, 0x00,
+            0x00, // Data(including a stuff-byte 0x55)
             0x38, 0x83, 0x8f, 0x82, // CRC checksum
-            0x55,   // EOF
+            0x55, // EOF
         ];
-        let mut min = min::Context::new(
-            String::from("min"),
-            &uart,
-            0,
-            false,
-        );
+        let mut min = min::Context::new(String::from("min"), uart, 0, false);
 
-        uart.open();
+        min.hw_if.open();
 
         min.poll(&payload, payload.len() as u32);
 
-        uart.close();
+        min.hw_if.close();
 
         // 0x38838f82 is the checksum in payload
         assert_ne!(0x38838f82, min.get_rx_frame_checksum());
@@ -180,29 +158,25 @@ mod tests {
 
     #[test]
     fn receive_frame_error_checksum() {
-        let uart = Uart{
+        let uart = Uart {
             tx_space_avaliable: 128,
         };
         let payload: [u8; 19] = [
-            0xaa, 0xaa, 0xaa,   // SOF
-            0x00,   // ID/control
-            0x08,   // Length
-            0xaa, 0xaa, 0x55, 0xaa, 0x00, 0x00, 0x00, 0x00, 0x00,   // Data(including a stuff-byte 0x55)
+            0xaa, 0xaa, 0xaa, // SOF
+            0x00, // ID/control
+            0x08, // Length
+            0xaa, 0xaa, 0x55, 0xaa, 0x00, 0x00, 0x00, 0x00,
+            0x00, // Data(including a stuff-byte 0x55)
             0x00, 0x83, 0x8f, 0x82, // CRC checksum(correct value is [0x38, 0x83, 0x8f, 0x82])
-            0x55,   // EOF
+            0x55, // EOF
         ];
-        let mut min = min::Context::new(
-            String::from("min"),
-            &uart,
-            0,
-            false,
-        );
+        let mut min = min::Context::new(String::from("min"), uart, 0, false);
 
-        uart.open();
+        min.hw_if.open();
 
         min.poll(&payload, payload.len() as u32);
 
-        uart.close();
+        min.hw_if.close();
 
         // 0x00838f82 is the checksum in payload
         assert_eq!(0x00838f82, min.get_rx_frame_checksum());

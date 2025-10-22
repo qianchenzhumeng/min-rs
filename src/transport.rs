@@ -61,8 +61,11 @@ pub struct Transport {
 
 impl Transport {
     pub fn new() -> Self {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
-        Transport{
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_millis();
+        Transport {
             frames: VecDeque::with_capacity(TRANSPORT_FIFO_MAX_FRAMES as usize),
             last_sent_ack_time_ms: now,
             last_received_anything_ms: now,
@@ -79,7 +82,10 @@ impl Transport {
     }
 
     pub fn reset_transport_fifo(&mut self) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(std::time::Duration::from_secs(0)).as_millis();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_millis();
 
         // Clear down the transmission FIFO queue
         self.frames.clear();
